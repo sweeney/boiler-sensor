@@ -1,0 +1,28 @@
+[Unit]
+Description=Heating System GPIO to MQTT Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/boiler-sensor
+Restart=on-failure
+RestartSec=2
+# Give time for MQTT shutdown event to publish
+TimeoutStopSec=10
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# GPIO access requires these
+SupplementaryGroups=gpio
+DeviceAllow=/dev/gpiochip0 rw
+
+[Install]
+WantedBy=multi-user.target

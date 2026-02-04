@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Check logic coverage
+        run: |
+          go test -coverprofile=logic.out ./internal/logic/
+          COVERAGE=$(go tool cover -func=logic.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "Logic package coverage: ${COVERAGE}%"
+          # Fail if coverage is below 100%
+          if [ "$(echo "$COVERAGE < 100" | bc)" -eq 1 ]; then
+            echo "ERROR: internal/logic coverage must be 100%, got ${COVERAGE}%"
+            exit 1
+          fi
+
+      - name: Generate HTML coverage report
+        run: |
+          go tool cover -html=coverage.out -o coverage.html
+          go tool cover -func=coverage.out > coverage.txt
+
+      - name: Generate coverage summary
+        run: |
+          echo "## Test Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Coverage by Package" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Package | Coverage |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|----------|" >> $GITHUB_STEP_SUMMARY
+
+          # Extract coverage per package
+          for pkg in internal/logic internal/mqtt internal/gpio internal; do
+            if go test -coverprofile=tmp.out ./.$pkg/ 2>/dev/null; then
+              COV=$(go tool cover -func=tmp.out | grep total | awk '{print $3}')
+              echo "| \`$pkg\` | $COV |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+          # Overall coverage
+          TOTAL=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Overall Coverage: $TOTAL**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📊 Download the HTML report below for line-by-line coverage details." >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage.html
+            coverage.txt
+          retention-days: 30
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+          - goos: linux
+            goarch: arm
+            goarm: "6"
+            suffix: linux-arm-pi-zero
+          - goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          go build -ldflags="-s -w" -o boiler-sensor-${{ matrix.suffix }} ./cmd/boiler-sensor
+          chmod +x boiler-sensor-${{ matrix.suffix }}
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: boiler-sensor-${{ matrix.suffix }}
+          path: boiler-sensor-${{ matrix.suffix }}
+          retention-days: 90

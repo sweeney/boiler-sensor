@@ -1,0 +1,22 @@
+# Built binaries (root level only)
+/heating-sense
+/heating-sense-arm
+*.exe
+
+# Test artifacts
+coverage.out
+*.coverprofile
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local Claude settings
+.claude/

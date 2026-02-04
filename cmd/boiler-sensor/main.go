@@ -1,0 +1,171 @@
+// Command boiler-sensor monitors GPIO inputs and publishes heating state changes to MQTT.
+package main
+
+import (
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/sweeney/boiler-sensor/internal/gpio"
+	"github.com/sweeney/boiler-sensor/internal/logic"
+	"github.com/sweeney/boiler-sensor/internal/mqtt"
+)
+
+func main() {
+	poll := flag.Duration("poll", 100*time.Millisecond, "GPIO polling interval")
+	debounce := flag.Duration("debounce", 250*time.Millisecond, "Debounce duration")
+	broker := flag.String("broker", "tcp://192.168.1.200:1883", "MQTT broker address")
+	heartbeat := flag.Duration("heartbeat", 15*time.Minute, "Heartbeat interval (0 to disable)")
+	printState := flag.Bool("print-state", false, "Print current state and exit")
+
+	flag.Parse()
+
+	if err := run(*poll, *debounce, *broker, *heartbeat, *printState); err != nil {
+		log.Fatalf("fatal: %v", err)
+	}
+}
+
+func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, printState bool) error {
+	// Initialize GPIO
+	gpioReader, err := gpio.NewRealReader()
+	if err != nil {
+		return fmt.Errorf("init gpio: %w", err)
+	}
+	defer gpioReader.Close()
+
+	// Print state mode
+	if printState {
+		ch, hw, err := gpioReader.Read()
+		if err != nil {
+			return fmt.Errorf("read gpio: %w", err)
+		}
+		chState := stateString(ch)
+		hwState := stateString(hw)
+		fmt.Printf("CH: %s, HW: %s\n", chState, hwState)
+		return nil
+	}
+
+	// Initialize MQTT
+	publisher, err := mqtt.NewRealPublisher(broker)
+	if err != nil {
+		return fmt.Errorf("init mqtt: %w", err)
+	}
+	defer publisher.Close()
+
+	// Publish startup event
+	startupEvent := mqtt.SystemEvent{
+		Timestamp: time.Now(),
+		Event:     "STARTUP",
+		Config: &mqtt.SystemConfig{
+			PollMs:      poll.Milliseconds(),
+			DebounceMs:  debounce.Milliseconds(),
+			HeartbeatMs: heartbeat.Milliseconds(),
+			Broker:      broker,
+		},
+	}
+	if err := publisher.PublishSystem(startupEvent); err != nil {
+		log.Printf("failed to publish startup event: %v", err)
+	} else {
+		log.Printf("published startup event")
+	}
+
+	log.Printf("started: poll=%v debounce=%v broker=%s heartbeat=%v", poll, debounce, broker, heartbeat)
+
+	return runLoop(gpioReader, publisher, poll, debounce, heartbeat)
+}
+
+func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, poll, debounce, heartbeat time.Duration) error {
+	startTime := time.Now()
+	detector := logic.NewDetector(debounce, startTime)
+
+	// Handle shutdown
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+
+	ticker := time.NewTicker(poll)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case s := <-sig:
+			log.Printf("received %v, shutting down", s)
+			signalName := "UNKNOWN"
+			if s == syscall.SIGINT {
+				signalName = "SIGINT"
+			} else if s == syscall.SIGTERM {
+				signalName = "SIGTERM"
+			}
+			event := mqtt.SystemEvent{
+				Timestamp: time.Now(),
+				Event:     "SHUTDOWN",
+				Reason:    signalName,
+			}
+			if err := publisher.PublishSystem(event); err != nil {
+				log.Printf("failed to publish shutdown event: %v", err)
+			} else {
+				log.Printf("published shutdown event")
+			}
+			return nil
+
+		case <-ticker.C:
+			now := time.Now()
+			ch, hw, err := gpioReader.Read()
+			if err != nil {
+				log.Printf("gpio read error: %v", err)
+				continue
+			}
+
+			events := detector.Process(logic.Input{
+				CH:   ch,
+				HW:   hw,
+				Time: now,
+			})
+
+			for _, event := range events {
+				log.Printf("event: %s (CH=%s HW=%s)", event.Type, event.CHState, event.HWState)
+				if err := publisher.Publish(event); err != nil {
+					log.Printf("publish error: %v", err)
+					// Don't crash on publish failure
+				}
+			}
+
+			if !detector.IsBaselined() {
+				// Still waiting for baseline
+				continue
+			}
+
+			// Check for heartbeat
+			if hbData := detector.CheckHeartbeat(now, heartbeat); hbData != nil {
+				hbEvent := mqtt.SystemEvent{
+					Timestamp: hbData.Timestamp,
+					Event:     "HEARTBEAT",
+					Heartbeat: &mqtt.HeartbeatInfo{
+						UptimeSeconds: int64(hbData.Uptime.Seconds()),
+						EventCounts: mqtt.HeartbeatCounts{
+							CHOn:  hbData.Counts.CHOn,
+							CHOff: hbData.Counts.CHOff,
+							HWOn:  hbData.Counts.HWOn,
+							HWOff: hbData.Counts.HWOff,
+						},
+					},
+				}
+				log.Printf("heartbeat: uptime=%v ch_on=%d ch_off=%d hw_on=%d hw_off=%d",
+					hbData.Uptime, hbData.Counts.CHOn, hbData.Counts.CHOff, hbData.Counts.HWOn, hbData.Counts.HWOff)
+				if err := publisher.PublishSystem(hbEvent); err != nil {
+					log.Printf("heartbeat publish error: %v", err)
+				}
+			}
+		}
+	}
+}
+
+func stateString(on bool) string {
+	if on {
+		return "ON"
+	}
+	return "OFF"
+}
