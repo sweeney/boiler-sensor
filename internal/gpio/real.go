@@ -16,7 +16,7 @@ type RealReader struct {
 }
 
 // NewRealReader creates a GPIO reader for actual Raspberry Pi hardware.
-func NewRealReader() (*RealReader, error) {
+func NewRealReader(pinCH, pinHW int) (*RealReader, error) {
 	chip, err := gpiocdev.NewChip("gpiochip0")
 	if err != nil {
 		return nil, fmt.Errorf("open gpio chip: %w", err)
@@ -24,17 +24,17 @@ func NewRealReader() (*RealReader, error) {
 
 	// Request lines as input with pull-down to match Pi boot defaults.
 	// This ensures consistent behavior with external optocoupler modules.
-	chLine, err := chip.RequestLine(PinCH, gpiocdev.AsInput, gpiocdev.WithPullDown)
+	chLine, err := chip.RequestLine(pinCH, gpiocdev.AsInput, gpiocdev.WithPullDown)
 	if err != nil {
 		chip.Close()
-		return nil, fmt.Errorf("request CH pin %d: %w", PinCH, err)
+		return nil, fmt.Errorf("request CH pin %d: %w", pinCH, err)
 	}
 
-	hwLine, err := chip.RequestLine(PinHW, gpiocdev.AsInput, gpiocdev.WithPullDown)
+	hwLine, err := chip.RequestLine(pinHW, gpiocdev.AsInput, gpiocdev.WithPullDown)
 	if err != nil {
 		chLine.Close()
 		chip.Close()
-		return nil, fmt.Errorf("request HW pin %d: %w", PinHW, err)
+		return nil, fmt.Errorf("request HW pin %d: %w", pinHW, err)
 	}
 
 	return &RealReader{

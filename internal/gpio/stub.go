@@ -8,7 +8,7 @@ import "errors"
 type RealReader struct{}
 
 // NewRealReader returns an error on non-Linux platforms.
-func NewRealReader() (*RealReader, error) {
+func NewRealReader(pinCH, pinHW int) (*RealReader, error) {
 	return nil, errors.New("gpio: not supported on this platform (requires Linux)")
 }
 

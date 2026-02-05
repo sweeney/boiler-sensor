@@ -4,17 +4,19 @@ A Go daemon for Raspberry Pi that monitors GPIO inputs for a heating system and 
 
 ## What It Does
 
-- Monitors two GPIO inputs: Central Heating (BCM 26) and Hot Water (BCM 16)
+- Monitors two GPIO inputs: Central Heating (default BCM 26) and Hot Water (default BCM 16)
 - Debounces input signals to filter noise
 - Publishes JSON events to MQTT only when states change
 - Runs as a systemd service on Raspberry Pi
 
 ## GPIO Pin Mapping
 
-| Signal          | BCM Pin | Logic                        |
-|-----------------|---------|------------------------------|
-| Central Heating | 26      | Raw HIGH = OFF, raw LOW = ON |
-| Hot Water       | 16      | Raw HIGH = OFF, raw LOW = ON |
+| Signal          | Default BCM Pin | Logic                        |
+|-----------------|-----------------|------------------------------|
+| Central Heating | 26              | Raw HIGH = OFF, raw LOW = ON |
+| Hot Water       | 16              | Raw HIGH = OFF, raw LOW = ON |
+
+Pin numbers are configurable via `--pin-ch` and `--pin-hw` flags.
 
 ### Why the Inverted Logic?
 
@@ -80,6 +82,8 @@ Events: `CH_ON`, `CH_OFF`, `HW_ON`, `HW_OFF`
 | `--poll`    | 100ms                       | GPIO polling interval |
 | `--debounce`| 250ms                       | Debounce duration     |
 | `--broker`  | tcp://192.168.1.200:1883    | MQTT broker address   |
+| `--pin-ch`  | 26                          | BCM pin for Central Heating |
+| `--pin-hw`  | 16                          | BCM pin for Hot Water |
 | `--print-state` | false                   | Print state and exit  |
 | `--heartbeat` | 15 minutes                | Heartbeat interval (0 to disable) |
 

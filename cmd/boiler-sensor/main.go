@@ -20,18 +20,20 @@ func main() {
 	debounce := flag.Duration("debounce", 250*time.Millisecond, "Debounce duration")
 	broker := flag.String("broker", "tcp://192.168.1.200:1883", "MQTT broker address")
 	heartbeat := flag.Duration("heartbeat", 15*time.Minute, "Heartbeat interval (0 to disable)")
+	pinCH := flag.Int("pin-ch", gpio.DefaultPinCH, "BCM pin number for Central Heating")
+	pinHW := flag.Int("pin-hw", gpio.DefaultPinHW, "BCM pin number for Hot Water")
 	printState := flag.Bool("print-state", false, "Print current state and exit")
 
 	flag.Parse()
 
-	if err := run(*poll, *debounce, *broker, *heartbeat, *printState); err != nil {
+	if err := run(*poll, *debounce, *broker, *heartbeat, *pinCH, *pinHW, *printState); err != nil {
 		log.Fatalf("fatal: %v", err)
 	}
 }
 
-func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, printState bool) error {
+func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, pinCH, pinHW int, printState bool) error {
 	// Initialize GPIO
-	gpioReader, err := gpio.NewRealReader()
+	gpioReader, err := gpio.NewRealReader(pinCH, pinHW)
 	if err != nil {
 		return fmt.Errorf("init gpio: %w", err)
 	}

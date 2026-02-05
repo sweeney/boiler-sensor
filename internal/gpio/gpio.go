@@ -14,8 +14,8 @@ type Reader interface {
 	Close() error
 }
 
-// Pin definitions (BCM numbering)
+// Default pin definitions (BCM numbering)
 const (
-	PinCH = 26 // Central Heating
-	PinHW = 16 // Hot Water
+	DefaultPinCH = 26 // Central Heating
+	DefaultPinHW = 16 // Hot Water
 )
