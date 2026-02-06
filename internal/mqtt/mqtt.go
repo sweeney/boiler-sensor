@@ -34,6 +34,7 @@ type SystemEvent struct {
 	Reason    string        // e.g., "SIGTERM", "SIGINT" (shutdown only)
 	Config    *SystemConfig // Configuration info (startup only)
 	Heartbeat *HeartbeatInfo // Heartbeat info (heartbeat only)
+	Network   *NetworkInfo  // Network info from pi-helper (startup/heartbeat)
 }
 
 // HeartbeatInfo contains information for a heartbeat event.
@@ -48,6 +49,16 @@ type HeartbeatCounts struct {
 	CHOff int `json:"ch_off"`
 	HWOn  int `json:"hw_on"`
 	HWOff int `json:"hw_off"`
+}
+
+// NetworkInfo contains network state from pi-helper.
+type NetworkInfo struct {
+	Type       string
+	IP         string
+	Status     string
+	Gateway    string
+	WifiStatus string
+	SSID       string
 }
 
 // SystemConfig contains daemon configuration for startup events.
@@ -101,12 +112,23 @@ type SystemPayloadInner struct {
 	Reason    string                  `json:"reason,omitempty"`
 	Config    *SystemConfigPayload    `json:"config,omitempty"`
 	Heartbeat *HeartbeatPayload       `json:"heartbeat,omitempty"`
+	Network   *NetworkPayload         `json:"network,omitempty"`
 }
 
 // HeartbeatPayload is the JSON representation of HeartbeatInfo.
 type HeartbeatPayload struct {
 	UptimeSeconds int64           `json:"uptime_seconds"`
 	EventCounts   HeartbeatCounts `json:"event_counts"`
+}
+
+// NetworkPayload is the JSON representation of NetworkInfo.
+type NetworkPayload struct {
+	Type       string `json:"type"`
+	IP         string `json:"ip"`
+	Status     string `json:"status"`
+	Gateway    string `json:"gateway"`
+	WifiStatus string `json:"wifi_status"`
+	SSID       string `json:"ssid"`
 }
 
 // SystemConfigPayload is the JSON representation of SystemConfig.
@@ -138,6 +160,17 @@ func FormatSystemPayload(event SystemEvent) ([]byte, error) {
 		inner.Heartbeat = &HeartbeatPayload{
 			UptimeSeconds: event.Heartbeat.UptimeSeconds,
 			EventCounts:   event.Heartbeat.EventCounts,
+		}
+	}
+
+	if event.Network != nil {
+		inner.Network = &NetworkPayload{
+			Type:       event.Network.Type,
+			IP:         event.Network.IP,
+			Status:     event.Network.Status,
+			Gateway:    event.Network.Gateway,
+			WifiStatus: event.Network.WifiStatus,
+			SSID:       event.Network.SSID,
 		}
 	}
 

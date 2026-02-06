@@ -68,6 +68,7 @@ func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, p
 			HeartbeatMs: heartbeat.Milliseconds(),
 			Broker:      broker,
 		},
+		Network: readNetworkInfo(),
 	}
 	if err := publisher.PublishSystem(startupEvent); err != nil {
 		log.Printf("failed to publish startup event: %v", err)
@@ -154,6 +155,7 @@ func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, poll, debounce, h
 							HWOff: hbData.Counts.HWOff,
 						},
 					},
+					Network: readNetworkInfo(),
 				}
 				log.Printf("heartbeat: uptime=%v ch_on=%d ch_off=%d hw_on=%d hw_off=%d",
 					hbData.Uptime, hbData.Counts.CHOn, hbData.Counts.CHOff, hbData.Counts.HWOn, hbData.Counts.HWOff)
@@ -162,6 +164,31 @@ func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, poll, debounce, h
 				}
 			}
 		}
+	}
+}
+
+// pi-helper env var names (written to /run/pi-helper.env).
+const (
+	envNetworkType       = "NETWORK_TYPE"
+	envNetworkIP         = "NETWORK_IP"
+	envNetworkStatus     = "NETWORK_STATUS"
+	envNetworkGateway    = "NETWORK_GATEWAY"
+	envNetworkWifiStatus = "NETWORK_WIFI_STATUS"
+	envNetworkWifiSSID   = "NETWORK_WIFI_SSID"
+)
+
+func readNetworkInfo() *mqtt.NetworkInfo {
+	status := os.Getenv(envNetworkStatus)
+	if status == "" {
+		return nil
+	}
+	return &mqtt.NetworkInfo{
+		Type:       os.Getenv(envNetworkType),
+		IP:         os.Getenv(envNetworkIP),
+		Status:     status,
+		Gateway:    os.Getenv(envNetworkGateway),
+		WifiStatus: os.Getenv(envNetworkWifiStatus),
+		SSID:       os.Getenv(envNetworkWifiSSID),
 	}
 }
 

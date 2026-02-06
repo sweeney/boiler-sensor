@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+EnvironmentFile=-/run/pi-helper.env
 ExecStart=/usr/local/bin/boiler-sensor
 Restart=on-failure
 RestartSec=2

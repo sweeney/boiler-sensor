@@ -871,6 +871,95 @@ func TestFormatSystemPayloadHeartbeatOmitsOtherFields(t *testing.T) {
 	}
 }
 
+func TestFormatSystemPayloadStartupWithNetwork(t *testing.T) {
+	event := SystemEvent{
+		Timestamp: time.Date(2026, 2, 3, 19, 5, 51, 0, time.UTC),
+		Event:     "STARTUP",
+		Config: &SystemConfig{
+			PollMs:      100,
+			DebounceMs:  250,
+			HeartbeatMs: 900000,
+			Broker:      "tcp://192.168.1.200:1883",
+		},
+		Network: &NetworkInfo{
+			Type:       "wifi",
+			IP:         "192.168.1.100",
+			Status:     "connected",
+			Gateway:    "192.168.1.1",
+			WifiStatus: "connected",
+			SSID:       "MyNetwork",
+		},
+	}
+
+	payload, err := FormatSystemPayload(event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `{"system":{"timestamp":"2026-02-03T19:05:51Z","event":"STARTUP","config":{"poll_ms":100,"debounce_ms":250,"heartbeat_ms":900000,"broker":"tcp://192.168.1.200:1883"},"network":{"type":"wifi","ip":"192.168.1.100","status":"connected","gateway":"192.168.1.1","wifi_status":"connected","ssid":"MyNetwork"}}}`
+	if string(payload) != expected {
+		t.Errorf("unexpected payload:\ngot:  %s\nwant: %s", string(payload), expected)
+	}
+}
+
+func TestFormatSystemPayloadHeartbeatWithNetwork(t *testing.T) {
+	event := SystemEvent{
+		Timestamp: time.Date(2026, 2, 4, 12, 15, 0, 0, time.UTC),
+		Event:     "HEARTBEAT",
+		Heartbeat: &HeartbeatInfo{
+			UptimeSeconds: 900,
+			EventCounts: HeartbeatCounts{
+				CHOn:  5,
+				CHOff: 4,
+				HWOn:  2,
+				HWOff: 2,
+			},
+		},
+		Network: &NetworkInfo{
+			Type:       "wifi",
+			IP:         "192.168.1.100",
+			Status:     "connected",
+			Gateway:    "192.168.1.1",
+			WifiStatus: "connected",
+			SSID:       "MyNetwork",
+		},
+	}
+
+	payload, err := FormatSystemPayload(event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `{"system":{"timestamp":"2026-02-04T12:15:00Z","event":"HEARTBEAT","heartbeat":{"uptime_seconds":900,"event_counts":{"ch_on":5,"ch_off":4,"hw_on":2,"hw_off":2}},"network":{"type":"wifi","ip":"192.168.1.100","status":"connected","gateway":"192.168.1.1","wifi_status":"connected","ssid":"MyNetwork"}}}`
+	if string(payload) != expected {
+		t.Errorf("unexpected payload:\ngot:  %s\nwant: %s", string(payload), expected)
+	}
+}
+
+func TestFormatSystemPayloadNetworkOmittedWhenNil(t *testing.T) {
+	event := SystemEvent{
+		Timestamp: time.Date(2026, 2, 3, 10, 30, 45, 0, time.UTC),
+		Event:     "SHUTDOWN",
+		Reason:    "SIGTERM",
+		Network:   nil,
+	}
+
+	payload, err := FormatSystemPayload(event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	system := parsed["system"].(map[string]interface{})
+	if _, exists := system["network"]; exists {
+		t.Error("network field should be omitted when nil")
+	}
+}
+
 func TestFakePublisherPublishSystemHeartbeat(t *testing.T) {
 	f := NewFakePublisher()
 

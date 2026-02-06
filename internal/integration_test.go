@@ -628,6 +628,106 @@ func TestIntegrationHeartbeatPayloadFormat(t *testing.T) {
 	}
 }
 
+// TestIntegrationStartupWithNetworkInfo verifies startup event includes network info.
+func TestIntegrationStartupWithNetworkInfo(t *testing.T) {
+	publisher := mqtt.NewFakePublisher()
+
+	event := mqtt.SystemEvent{
+		Timestamp: time.Date(2026, 2, 3, 19, 5, 51, 0, time.UTC),
+		Event:     "STARTUP",
+		Config: &mqtt.SystemConfig{
+			PollMs:      100,
+			DebounceMs:  250,
+			HeartbeatMs: 900000,
+			Broker:      "tcp://192.168.1.200:1883",
+		},
+		Network: &mqtt.NetworkInfo{
+			Type:       "wifi",
+			IP:         "192.168.1.100",
+			Status:     "connected",
+			Gateway:    "192.168.1.1",
+			WifiStatus: "connected",
+			SSID:       "MyNetwork",
+		},
+	}
+
+	if err := publisher.PublishSystem(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify JSON payload contains network object
+	var parsed mqtt.SystemPayload
+	if err := json.Unmarshal(publisher.SystemPayloads[0], &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	if parsed.System.Network == nil {
+		t.Fatal("expected network to be present in startup payload")
+	}
+	if parsed.System.Network.Type != "wifi" {
+		t.Errorf("network type: expected wifi, got %s", parsed.System.Network.Type)
+	}
+	if parsed.System.Network.IP != "192.168.1.100" {
+		t.Errorf("network ip: expected 192.168.1.100, got %s", parsed.System.Network.IP)
+	}
+	if parsed.System.Network.SSID != "MyNetwork" {
+		t.Errorf("network ssid: expected MyNetwork, got %s", parsed.System.Network.SSID)
+	}
+}
+
+// TestIntegrationHeartbeatWithNetworkInfo verifies heartbeat event includes network info.
+func TestIntegrationHeartbeatWithNetworkInfo(t *testing.T) {
+	publisher := mqtt.NewFakePublisher()
+
+	event := mqtt.SystemEvent{
+		Timestamp: time.Date(2026, 2, 4, 12, 15, 0, 0, time.UTC),
+		Event:     "HEARTBEAT",
+		Heartbeat: &mqtt.HeartbeatInfo{
+			UptimeSeconds: 900,
+			EventCounts: mqtt.HeartbeatCounts{
+				CHOn:  5,
+				CHOff: 4,
+				HWOn:  2,
+				HWOff: 2,
+			},
+		},
+		Network: &mqtt.NetworkInfo{
+			Type:       "ethernet",
+			IP:         "10.0.0.50",
+			Status:     "connected",
+			Gateway:    "10.0.0.1",
+			WifiStatus: "disabled",
+			SSID:       "",
+		},
+	}
+
+	if err := publisher.PublishSystem(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify JSON payload contains network object
+	var parsed mqtt.SystemPayload
+	if err := json.Unmarshal(publisher.SystemPayloads[0], &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	if parsed.System.Heartbeat == nil {
+		t.Fatal("expected heartbeat to be present")
+	}
+	if parsed.System.Network == nil {
+		t.Fatal("expected network to be present in heartbeat payload")
+	}
+	if parsed.System.Network.Type != "ethernet" {
+		t.Errorf("network type: expected ethernet, got %s", parsed.System.Network.Type)
+	}
+	if parsed.System.Network.IP != "10.0.0.50" {
+		t.Errorf("network ip: expected 10.0.0.50, got %s", parsed.System.Network.IP)
+	}
+	if parsed.System.Network.Gateway != "10.0.0.1" {
+		t.Errorf("network gateway: expected 10.0.0.1, got %s", parsed.System.Network.Gateway)
+	}
+}
+
 // TestIntegrationHeartbeatAfterTransitions verifies heartbeat contains correct counts after transitions.
 func TestIntegrationHeartbeatAfterTransitions(t *testing.T) {
 	samples := []gpio.Sample{
