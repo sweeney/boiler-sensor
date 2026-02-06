@@ -1,6 +1,7 @@
 # Built binaries (root level only)
 /heating-sense
 /heating-sense-arm
+/boiler-sensor-arm
 *.exe
 
 # Test artifacts
