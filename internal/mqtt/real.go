@@ -16,12 +16,22 @@ type RealPublisher struct {
 
 // NewRealPublisher creates a publisher connected to the given broker.
 func NewRealPublisher(broker string) (*RealPublisher, error) {
+	willPayload, err := FormatSystemPayload(SystemEvent{
+		Timestamp: time.Now(),
+		Event:     "SHUTDOWN",
+		Reason:    "MQTT_DISCONNECT",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("format will payload: %w", err)
+	}
+
 	opts := paho.NewClientOptions().
 		AddBroker(broker).
 		SetClientID("boiler-sensor").
 		SetAutoReconnect(true).
 		SetConnectRetry(true).
-		SetConnectRetryInterval(5 * time.Second)
+		SetConnectRetryInterval(5 * time.Second).
+		SetWill(TopicSystem, string(willPayload), 1, true)
 
 	client := paho.NewClient(opts)
 	token := client.Connect()
@@ -64,8 +74,8 @@ func (p *RealPublisher) PublishSystem(event SystemEvent) error {
 		return fmt.Errorf("format system payload: %w", err)
 	}
 
-	// QoS 1 (at-least-once) for shutdown events - we want to ensure delivery
-	token := p.client.Publish(TopicSystem, 1, false, payload)
+	// QoS 1 (at-least-once) for system events - we want to ensure delivery
+	token := p.client.Publish(TopicSystem, 1, event.Retained, payload)
 	if !token.WaitTimeout(5 * time.Second) {
 		return fmt.Errorf("publish system timeout")
 	}

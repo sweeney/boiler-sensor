@@ -960,6 +960,67 @@ func TestFormatSystemPayloadNetworkOmittedWhenNil(t *testing.T) {
 	}
 }
 
+func TestWillPayloadFormat(t *testing.T) {
+	event := SystemEvent{
+		Timestamp: time.Date(2026, 2, 10, 8, 30, 0, 0, time.UTC),
+		Event:     "SHUTDOWN",
+		Reason:    "MQTT_DISCONNECT",
+	}
+
+	payload, err := FormatSystemPayload(event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed SystemPayload
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	if parsed.System.Event != "SHUTDOWN" {
+		t.Errorf("expected SHUTDOWN event, got %s", parsed.System.Event)
+	}
+	if parsed.System.Reason != "MQTT_DISCONNECT" {
+		t.Errorf("expected MQTT_DISCONNECT reason, got %s", parsed.System.Reason)
+	}
+	if parsed.System.Timestamp != "2026-02-10T08:30:00Z" {
+		t.Errorf("unexpected timestamp: %s", parsed.System.Timestamp)
+	}
+
+	expected := `{"system":{"timestamp":"2026-02-10T08:30:00Z","event":"SHUTDOWN","reason":"MQTT_DISCONNECT"}}`
+	if string(payload) != expected {
+		t.Errorf("unexpected payload:\ngot:  %s\nwant: %s", string(payload), expected)
+	}
+}
+
+func TestFakePublisherRecordsRetainedFlag(t *testing.T) {
+	f := NewFakePublisher()
+
+	retained := SystemEvent{
+		Timestamp: time.Now(),
+		Event:     "STARTUP",
+		Retained:  true,
+	}
+	notRetained := SystemEvent{
+		Timestamp: time.Now(),
+		Event:     "HEARTBEAT",
+		Retained:  false,
+	}
+
+	f.PublishSystem(retained)
+	f.PublishSystem(notRetained)
+
+	if len(f.SystemEvents) != 2 {
+		t.Fatalf("expected 2 system events, got %d", len(f.SystemEvents))
+	}
+	if !f.SystemEvents[0].Retained {
+		t.Error("first event should have Retained=true")
+	}
+	if f.SystemEvents[1].Retained {
+		t.Error("second event should have Retained=false")
+	}
+}
+
 func TestFakePublisherPublishSystemHeartbeat(t *testing.T) {
 	f := NewFakePublisher()
 

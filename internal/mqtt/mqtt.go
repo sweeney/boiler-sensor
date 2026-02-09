@@ -35,6 +35,7 @@ type SystemEvent struct {
 	Config    *SystemConfig // Configuration info (startup only)
 	Heartbeat *HeartbeatInfo // Heartbeat info (heartbeat only)
 	Network   *NetworkInfo  // Network info from pi-helper (startup/heartbeat)
+	Retained  bool          // Whether the message should be retained by the broker
 }
 
 // HeartbeatInfo contains information for a heartbeat event.

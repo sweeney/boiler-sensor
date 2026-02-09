@@ -62,6 +62,7 @@ func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, p
 	startupEvent := mqtt.SystemEvent{
 		Timestamp: time.Now(),
 		Event:     "STARTUP",
+		Retained:  true,
 		Config: &mqtt.SystemConfig{
 			PollMs:      poll.Milliseconds(),
 			DebounceMs:  debounce.Milliseconds(),
@@ -106,6 +107,7 @@ func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, poll, debounce, h
 				Timestamp: time.Now(),
 				Event:     "SHUTDOWN",
 				Reason:    signalName,
+				Retained:  true,
 			}
 			if err := publisher.PublishSystem(event); err != nil {
 				log.Printf("failed to publish shutdown event: %v", err)

@@ -728,6 +728,106 @@ func TestIntegrationHeartbeatWithNetworkInfo(t *testing.T) {
 	}
 }
 
+// TestIntegrationStartupEventIsRetained verifies STARTUP has Retained=true.
+func TestIntegrationStartupEventIsRetained(t *testing.T) {
+	publisher := mqtt.NewFakePublisher()
+
+	event := mqtt.SystemEvent{
+		Timestamp: time.Now(),
+		Event:     "STARTUP",
+		Retained:  true,
+		Config: &mqtt.SystemConfig{
+			PollMs:      100,
+			DebounceMs:  250,
+			HeartbeatMs: 900000,
+			Broker:      "tcp://192.168.1.200:1883",
+		},
+	}
+
+	if err := publisher.PublishSystem(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !publisher.SystemEvents[0].Retained {
+		t.Error("STARTUP event should have Retained=true")
+	}
+}
+
+// TestIntegrationShutdownEventIsRetained verifies SHUTDOWN has Retained=true.
+func TestIntegrationShutdownEventIsRetained(t *testing.T) {
+	publisher := mqtt.NewFakePublisher()
+
+	event := mqtt.SystemEvent{
+		Timestamp: time.Now(),
+		Event:     "SHUTDOWN",
+		Reason:    "SIGTERM",
+		Retained:  true,
+	}
+
+	if err := publisher.PublishSystem(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !publisher.SystemEvents[0].Retained {
+		t.Error("SHUTDOWN event should have Retained=true")
+	}
+}
+
+// TestIntegrationHeartbeatEventIsNotRetained verifies HEARTBEAT has Retained=false.
+func TestIntegrationHeartbeatEventIsNotRetained(t *testing.T) {
+	publisher := mqtt.NewFakePublisher()
+
+	event := mqtt.SystemEvent{
+		Timestamp: time.Now(),
+		Event:     "HEARTBEAT",
+		Heartbeat: &mqtt.HeartbeatInfo{
+			UptimeSeconds: 900,
+			EventCounts:   mqtt.HeartbeatCounts{},
+		},
+	}
+
+	if err := publisher.PublishSystem(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if publisher.SystemEvents[0].Retained {
+		t.Error("HEARTBEAT event should have Retained=false")
+	}
+}
+
+// TestIntegrationWillPayloadFormat verifies the will payload JSON matches expected structure.
+func TestIntegrationWillPayloadFormat(t *testing.T) {
+	// The will payload is a SHUTDOWN event with reason MQTT_DISCONNECT
+	event := mqtt.SystemEvent{
+		Timestamp: time.Date(2026, 2, 10, 8, 30, 0, 0, time.UTC),
+		Event:     "SHUTDOWN",
+		Reason:    "MQTT_DISCONNECT",
+	}
+
+	payload, err := mqtt.FormatSystemPayload(event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed mqtt.SystemPayload
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	if parsed.System.Event != "SHUTDOWN" {
+		t.Errorf("expected SHUTDOWN event, got %s", parsed.System.Event)
+	}
+	if parsed.System.Reason != "MQTT_DISCONNECT" {
+		t.Errorf("expected MQTT_DISCONNECT reason, got %s", parsed.System.Reason)
+	}
+	if parsed.System.Config != nil {
+		t.Error("will payload should not contain config")
+	}
+	if parsed.System.Heartbeat != nil {
+		t.Error("will payload should not contain heartbeat")
+	}
+}
+
 // TestIntegrationHeartbeatAfterTransitions verifies heartbeat contains correct counts after transitions.
 func TestIntegrationHeartbeatAfterTransitions(t *testing.T) {
 	samples := []gpio.Sample{
