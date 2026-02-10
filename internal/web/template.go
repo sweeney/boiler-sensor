@@ -48,15 +48,19 @@ th { width: 40%; }
 .unknown { color: orange; }
 .connected { color: green; }
 .disconnected { color: red; }
+.live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 6px; vertical-align: middle; }
+.live-dot.ok { background: green; }
+.live-dot.err { background: red; }
+.live-dot.pending { background: orange; }
 </style>
 </head>
 <body>
-<h1>Boiler Sensor</h1>
+<h1>Boiler Sensor{{if .Config.WSBroker}}<span id="live-dot" class="live-dot pending" title="connecting"></span>{{end}}</h1>
 
 <h2>State</h2>
 <table>
-<tr><th>Central Heating</th><td class="{{if eq (stateOrUnknown (printf "%s" .CH)) "ON"}}on{{else if eq (stateOrUnknown (printf "%s" .CH)) "OFF"}}off{{else}}unknown{{end}}">{{stateOrUnknown (printf "%s" .CH)}}</td></tr>
-<tr><th>Hot Water</th><td class="{{if eq (stateOrUnknown (printf "%s" .HW)) "ON"}}on{{else if eq (stateOrUnknown (printf "%s" .HW)) "OFF"}}off{{else}}unknown{{end}}">{{stateOrUnknown (printf "%s" .HW)}}</td></tr>
+<tr><th>Central Heating</th><td id="ch-state" class="{{if eq (stateOrUnknown (printf "%s" .CH)) "ON"}}on{{else if eq (stateOrUnknown (printf "%s" .CH)) "OFF"}}off{{else}}unknown{{end}}">{{stateOrUnknown (printf "%s" .CH)}}</td></tr>
+<tr><th>Hot Water</th><td id="hw-state" class="{{if eq (stateOrUnknown (printf "%s" .HW)) "ON"}}on{{else if eq (stateOrUnknown (printf "%s" .HW)) "OFF"}}off{{else}}unknown{{end}}">{{stateOrUnknown (printf "%s" .HW)}}</td></tr>
 <tr><th>Ready</th><td>{{if .Baselined}}yes{{else}}no{{end}}</td></tr>
 </table>
 
@@ -87,6 +91,57 @@ th { width: 40%; }
 </table>
 
 <p><a href="/index.json">JSON</a></p>
+{{if .Config.WSBroker}}
+<script src="/mqtt.min.js"></script>
+<script>
+(function() {
+  var broker = "{{.Config.WSBroker}}";
+  var topic = "energy/boiler/sensor/events";
+  var dot = document.getElementById("live-dot");
+  var chEl = document.getElementById("ch-state");
+  var hwEl = document.getElementById("hw-state");
+
+  function setState(el, state) {
+    el.textContent = state;
+    el.className = state === "ON" ? "on" : state === "OFF" ? "off" : "unknown";
+  }
+
+  function setDot(cls, title) {
+    dot.className = "live-dot " + cls;
+    dot.title = title;
+  }
+
+  var client = mqtt.connect(broker, { reconnectPeriod: 5000 });
+
+  client.on("connect", function() {
+    setDot("ok", "live");
+    client.subscribe(topic);
+  });
+
+  client.on("reconnect", function() {
+    setDot("pending", "reconnecting");
+  });
+
+  client.on("offline", function() {
+    setDot("err", "offline");
+  });
+
+  client.on("error", function() {
+    setDot("err", "error");
+  });
+
+  client.on("message", function(t, payload) {
+    try {
+      var msg = JSON.parse(payload.toString());
+      if (msg.boiler) {
+        setState(chEl, msg.boiler.ch.state);
+        setState(hwEl, msg.boiler.hw.state);
+      }
+    } catch (e) {}
+  });
+})();
+</script>
+{{end}}
 </body>
 </html>
 `

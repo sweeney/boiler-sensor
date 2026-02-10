@@ -588,3 +588,24 @@ func TestRunLoopUpdatesTracker(t *testing.T) {
 		t.Error("tracker should show MQTT connected")
 	}
 }
+
+func TestResolveWSBroker(t *testing.T) {
+	tests := []struct {
+		name   string
+		ws     string
+		broker string
+		want   string
+	}{
+		{"derives from broker", "=broker", "tcp://192.168.1.200:1883", "ws://192.168.1.200:9001"},
+		{"explicit URL", "ws://10.0.0.1:8080", "tcp://192.168.1.200:1883", "ws://10.0.0.1:8080"},
+		{"off disables", "off", "tcp://192.168.1.200:1883", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveWSBroker(tt.ws, tt.broker)
+			if got != tt.want {
+				t.Errorf("resolveWSBroker(%q, %q) = %q, want %q", tt.ws, tt.broker, got, tt.want)
+			}
+		})
+	}
+}

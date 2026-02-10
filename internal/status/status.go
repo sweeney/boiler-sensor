@@ -27,6 +27,7 @@ type Config struct {
 	HeartbeatMs int64
 	Broker      string
 	HTTPPort    string
+	WSBroker    string // Websocket broker URL for browser MQTT (empty = disabled)
 }
 
 // Snapshot is a point-in-time view of daemon state.

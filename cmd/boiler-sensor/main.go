@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -28,15 +29,17 @@ func main() {
 	pinHW := flag.Int("pin-hw", gpio.DefaultPinHW, "BCM pin number for Hot Water")
 	printState := flag.Bool("print-state", false, "Print current state and exit")
 	httpAddr := flag.String("http", ":80", "HTTP status address (empty to disable)")
+	wsBroker := flag.String("ws-broker", "=broker", `MQTT websocket URL for live UI ("=broker" derives from --broker, "off" disables)`)
 
 	flag.Parse()
 
-	if err := run(*poll, *debounce, *broker, *heartbeat, *pinCH, *pinHW, *printState, *httpAddr); err != nil {
+	ws := resolveWSBroker(*wsBroker, *broker)
+	if err := run(*poll, *debounce, *broker, *heartbeat, *pinCH, *pinHW, *printState, *httpAddr, ws); err != nil {
 		log.Fatalf("fatal: %v", err)
 	}
 }
 
-func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, pinCH, pinHW int, printState bool, httpAddr string) error {
+func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, pinCH, pinHW int, printState bool, httpAddr, wsBroker string) error {
 	// Initialize GPIO
 	gpioReader, err := gpio.NewRealReader(pinCH, pinHW)
 	if err != nil {
@@ -67,6 +70,7 @@ func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, p
 		HeartbeatMs: heartbeat.Milliseconds(),
 		Broker:      broker,
 		HTTPPort:    httpAddr,
+		WSBroker:    wsBroker,
 	})
 	if net := readNetworkInfo(); net != nil {
 		tracker.SetNetwork(net)
@@ -239,4 +243,23 @@ func stateString(on bool) string {
 		return "ON"
 	}
 	return "OFF"
+}
+
+// resolveWSBroker converts the --ws-broker flag value into a concrete URL.
+// "=broker" derives ws://host:9001 from the TCP broker address; empty disables.
+func resolveWSBroker(ws, broker string) string {
+	if ws == "off" {
+		return ""
+	}
+	if ws != "=broker" {
+		return ws
+	}
+	u, err := url.Parse(broker)
+	if err != nil {
+		log.Printf("ws-broker: cannot parse --broker %q: %v", broker, err)
+		return ""
+	}
+	u.Scheme = "ws"
+	u.Host = u.Hostname() + ":9001"
+	return u.String()
 }

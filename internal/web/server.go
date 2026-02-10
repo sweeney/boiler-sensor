@@ -3,11 +3,15 @@ package web
 
 import (
 	"context"
+	_ "embed"
 	"net"
 	"net/http"
 
 	"github.com/sweeney/boiler-sensor/internal/status"
 )
+
+//go:embed static/mqtt.min.js
+var mqttJS []byte
 
 // Server serves the status page over HTTP.
 type Server struct {
@@ -23,6 +27,7 @@ func New(addr string, tracker *status.Tracker) *Server {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/index.html", s.handleIndex)
 	mux.HandleFunc("/index.json", s.handleJSON)
+	mux.HandleFunc("/mqtt.min.js", handleMQTTJS)
 
 	s.httpServer = &http.Server{
 		Addr:    addr,
@@ -60,4 +65,9 @@ func (s *Server) handleJSON(w http.ResponseWriter, r *http.Request) {
 	snap := s.tracker.Snapshot()
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(formatJSON(snap))
+}
+
+func handleMQTTJS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript")
+	w.Write(mqttJS)
 }

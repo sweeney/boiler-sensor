@@ -57,6 +57,7 @@ type ConfigJSON struct {
 	HeartbeatMs int64  `json:"heartbeat_ms"`
 	Broker      string `json:"broker"`
 	HTTPPort    string `json:"http_port"`
+	WSBroker    string `json:"ws_broker,omitempty"`
 }
 
 func buildInner(snap Snapshot) StatusInner {
@@ -89,6 +90,7 @@ func buildInner(snap Snapshot) StatusInner {
 			HeartbeatMs: snap.Config.HeartbeatMs,
 			Broker:      snap.Config.Broker,
 			HTTPPort:    snap.Config.HTTPPort,
+			WSBroker:    snap.Config.WSBroker,
 		},
 	}
 }
