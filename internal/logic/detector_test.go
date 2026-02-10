@@ -666,6 +666,105 @@ func TestHeartbeatContainsEventCounts(t *testing.T) {
 	}
 }
 
+// --- Fuzz test ---
+
+// FuzzDetectorProcess feeds random GPIO sample sequences into Process() and
+// asserts invariants that must hold for any input:
+//   - No panics
+//   - Every emitted event has a valid type
+//   - Event timestamps never go backwards
+//   - CH/HW states in events are always "ON" or "OFF"
+//   - No events are emitted before baseline is established
+//   - Event counts in the detector are non-negative and consistent
+func FuzzDetectorProcess(f *testing.F) {
+	// Seed corpus: stable, single transition, rapid bouncing
+	f.Add([]byte{0x00, 0x00, 0x00, 0x00})                         // stable OFF
+	f.Add([]byte{0x03, 0x03, 0x03, 0x03})                         // stable both ON
+	f.Add([]byte{0x00, 0x00, 0x00, 0x01, 0x01, 0x01})             // CH OFF→ON
+	f.Add([]byte{0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00}) // rapid bounce
+
+	validTypes := map[EventType]bool{
+		EventCHOn: true, EventCHOff: true,
+		EventHWOn: true, EventHWOff: true,
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) == 0 {
+			return
+		}
+
+		start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		step := 100 * time.Millisecond
+		d := NewDetector(250*time.Millisecond, start)
+
+		var (
+			lastTimestamp time.Time
+			preBaseline   = true
+			totalCHOn     int
+			totalCHOff    int
+			totalHWOn     int
+			totalHWOff    int
+		)
+
+		for i, b := range data {
+			ch := b&0x01 != 0
+			hw := b&0x02 != 0
+			now := start.Add(time.Duration(i+1) * step)
+
+			events := d.Process(Input{CH: ch, HW: hw, Time: now})
+
+			if preBaseline && !d.IsBaselined() {
+				if len(events) != 0 {
+					t.Fatal("events emitted before baseline established")
+				}
+				continue
+			}
+			preBaseline = false
+
+			for _, e := range events {
+				if !validTypes[e.Type] {
+					t.Fatalf("invalid event type: %q", e.Type)
+				}
+				if e.CHState != StateOn && e.CHState != StateOff {
+					t.Fatalf("invalid CH state: %q", e.CHState)
+				}
+				if e.HWState != StateOn && e.HWState != StateOff {
+					t.Fatalf("invalid HW state: %q", e.HWState)
+				}
+				if !lastTimestamp.IsZero() && e.Timestamp.Before(lastTimestamp) {
+					t.Fatalf("timestamp went backwards: %v -> %v", lastTimestamp, e.Timestamp)
+				}
+				lastTimestamp = e.Timestamp
+
+				switch e.Type {
+				case EventCHOn:
+					totalCHOn++
+				case EventCHOff:
+					totalCHOff++
+				case EventHWOn:
+					totalHWOn++
+				case EventHWOff:
+					totalHWOff++
+				}
+			}
+		}
+
+		// Event counts in detector must match what we observed
+		if d.eventCounts.CHOn != totalCHOn {
+			t.Errorf("CHOn count mismatch: detector=%d observed=%d", d.eventCounts.CHOn, totalCHOn)
+		}
+		if d.eventCounts.CHOff != totalCHOff {
+			t.Errorf("CHOff count mismatch: detector=%d observed=%d", d.eventCounts.CHOff, totalCHOff)
+		}
+		if d.eventCounts.HWOn != totalHWOn {
+			t.Errorf("HWOn count mismatch: detector=%d observed=%d", d.eventCounts.HWOn, totalHWOn)
+		}
+		if d.eventCounts.HWOff != totalHWOff {
+			t.Errorf("HWOff count mismatch: detector=%d observed=%d", d.eventCounts.HWOff, totalHWOff)
+		}
+	})
+}
+
 func TestMultipleHeartbeatsAccumulateCounts(t *testing.T) {
 	startTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	d := NewDetector(250*time.Millisecond, startTime)

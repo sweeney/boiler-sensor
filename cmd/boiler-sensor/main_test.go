@@ -131,6 +131,26 @@ func repeat(sample gpio.Sample, n int) []gpio.Sample {
 	return out
 }
 
+// faultReader wraps a FakeReader and returns errors for a range of Read() calls.
+// No shared mutable state — the fault range is fixed at construction.
+type faultReader struct {
+	inner      *gpio.FakeReader
+	call       int
+	faultStart int // first call index that returns error (inclusive)
+	faultEnd   int // last call index that returns error (exclusive)
+}
+
+func (r *faultReader) Read() (bool, bool, error) {
+	i := r.call
+	r.call++
+	if i >= r.faultStart && i < r.faultEnd {
+		return false, false, errors.New("gpio fault")
+	}
+	return r.inner.Read()
+}
+
+func (r *faultReader) Close() error { return r.inner.Close() }
+
 // runRunLoop drives runLoop with the given samples and signal, returning
 // the error and the fake publisher for assertions.
 func runRunLoop(t *testing.T, reader gpio.Reader, pub *mqtt.FakePublisher, debounce, heartbeat time.Duration, clock func() time.Time, nTicks int, signal os.Signal) error {
@@ -263,35 +283,19 @@ func TestRunLoopBounceRejection(t *testing.T) {
 }
 
 func TestRunLoopGPIOReadError(t *testing.T) {
-	// Provide some valid samples, then set ReadError to simulate failure.
-	// The loop should continue past errors and still publish SHUTDOWN.
-	reader := &gpio.FakeReader{
-		Samples: repeat(gpio.Sample{CH: false, HW: false}, 2),
+	// 2 valid reads then 2 faults. Loop should continue past errors
+	// and still publish SHUTDOWN.
+	inner := gpio.NewFakeReader(repeat(gpio.Sample{CH: false, HW: false}, 2))
+	reader := &faultReader{
+		inner:      inner,
+		faultStart: 2, // calls 2,3 return error
+		faultEnd:   4,
 	}
 
 	pub := mqtt.NewFakePublisher()
 	clock := fakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), 100*time.Millisecond)
 
-	tick := make(chan time.Time)
-	sig := make(chan os.Signal, 1)
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- runLoop(reader, pub, 250*time.Millisecond, 0, clock, tick, sig)
-	}()
-
-	// Send 2 valid ticks
-	tick <- time.Time{}
-	tick <- time.Time{}
-
-	// Now set read error and send more ticks — loop should not crash
-	reader.ReadError = errors.New("gpio fault")
-	tick <- time.Time{}
-	tick <- time.Time{}
-
-	sig <- syscall.SIGTERM
-
-	err := <-errCh
+	err := runRunLoop(t, reader, pub, 250*time.Millisecond, 0, clock, 4, syscall.SIGTERM)
 	if err != nil {
 		t.Fatalf("runLoop returned error: %v", err)
 	}
@@ -439,5 +443,95 @@ func TestRunLoopShutdownSIGTERM(t *testing.T) {
 	}
 	if se.Retained != true {
 		t.Error("expected Retained=true for SHUTDOWN")
+	}
+}
+
+func TestRunLoopHeartbeatIncludesNetworkInfo(t *testing.T) {
+	// Set network env vars so readNetworkInfo() returns data, then trigger
+	// a heartbeat and verify the system event carries the network info through.
+	t.Setenv(envNetworkStatus, "connected")
+	t.Setenv(envNetworkType, "wifi")
+	t.Setenv(envNetworkIP, "192.168.1.42")
+	t.Setenv(envNetworkGateway, "192.168.1.1")
+	t.Setenv(envNetworkWifiStatus, "associated")
+	t.Setenv(envNetworkWifiSSID, "HomeNet")
+
+	step := 5 * time.Minute
+	debounce := 10 * time.Minute
+	heartbeatInterval := 15 * time.Minute
+
+	samples := repeat(gpio.Sample{CH: false, HW: false}, 4)
+	reader := gpio.NewFakeReader(samples)
+	pub := mqtt.NewFakePublisher()
+	clock := fakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), step)
+
+	err := runRunLoop(t, reader, pub, debounce, heartbeatInterval, clock, len(samples), syscall.SIGTERM)
+	if err != nil {
+		t.Fatalf("runLoop returned error: %v", err)
+	}
+
+	// Find the HEARTBEAT event
+	var hb *mqtt.SystemEvent
+	for i := range pub.SystemEvents {
+		if pub.SystemEvents[i].Event == "HEARTBEAT" {
+			hb = &pub.SystemEvents[i]
+			break
+		}
+	}
+	if hb == nil {
+		t.Fatal("expected a HEARTBEAT system event")
+	}
+
+	if hb.Network == nil {
+		t.Fatal("HEARTBEAT event missing Network info")
+	}
+	if hb.Network.Status != "connected" {
+		t.Errorf("Network.Status: got %q, want %q", hb.Network.Status, "connected")
+	}
+	if hb.Network.Type != "wifi" {
+		t.Errorf("Network.Type: got %q, want %q", hb.Network.Type, "wifi")
+	}
+	if hb.Network.IP != "192.168.1.42" {
+		t.Errorf("Network.IP: got %q, want %q", hb.Network.IP, "192.168.1.42")
+	}
+	if hb.Network.Gateway != "192.168.1.1" {
+		t.Errorf("Network.Gateway: got %q, want %q", hb.Network.Gateway, "192.168.1.1")
+	}
+	if hb.Network.WifiStatus != "associated" {
+		t.Errorf("Network.WifiStatus: got %q, want %q", hb.Network.WifiStatus, "associated")
+	}
+	if hb.Network.SSID != "HomeNet" {
+		t.Errorf("Network.SSID: got %q, want %q", hb.Network.SSID, "HomeNet")
+	}
+}
+
+func TestRunLoopGPIOErrorRecovery(t *testing.T) {
+	// Establish baseline (4 ticks), inject GPIO errors (3 ticks), then trigger
+	// a real transition (4 ticks). Verifies the loop recovers normally.
+	inner := gpio.NewFakeReader(append(
+		repeat(gpio.Sample{CH: false, HW: false}, 4), // baseline
+		repeat(gpio.Sample{CH: true, HW: false}, 4)..., // transition after recovery
+	))
+	reader := &faultReader{
+		inner:      inner,
+		faultStart: 4, // calls 4,5,6 return error (after baseline)
+		faultEnd:   7,
+	}
+
+	pub := mqtt.NewFakePublisher()
+	clock := fakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), 100*time.Millisecond)
+
+	// 4 baseline + 3 errors + 4 recovery = 11 ticks
+	err := runRunLoop(t, reader, pub, 250*time.Millisecond, 0, clock, 11, syscall.SIGTERM)
+	if err != nil {
+		t.Fatalf("runLoop returned error: %v", err)
+	}
+
+	// Should have exactly 1 CH_ON event — errors didn't break state tracking
+	if len(pub.Events) != 1 {
+		t.Fatalf("expected 1 heating event after recovery, got %d", len(pub.Events))
+	}
+	if pub.Events[0].Type != "CH_ON" {
+		t.Errorf("expected CH_ON, got %s", pub.Events[0].Type)
 	}
 }
