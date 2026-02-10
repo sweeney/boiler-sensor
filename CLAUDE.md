@@ -54,11 +54,11 @@ Raw GPIO active = logical OFF. This inversion must be handled in exactly one pla
 
 ## MQTT Payload Format
 
-Topic: `energy/BOILER_SENSOR/SENSOR/heating`
+Topic: `energy/boiler/sensor/events`
 
 ```json
 {
-  "heating": {
+  "boiler": {
     "timestamp": "2026-02-02T22:18:12Z",
     "event": "CH_ON",
     "ch": { "state": "ON" },

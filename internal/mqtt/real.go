@@ -127,7 +127,7 @@ func (p *RealPublisher) IsConnected() bool {
 	return p.connected
 }
 
-// Publish sends a heating event to the MQTT broker.
+// Publish sends a boiler event to the MQTT broker.
 func (p *RealPublisher) Publish(event logic.Event) error {
 	payload, err := FormatPayload(event)
 	if err != nil {

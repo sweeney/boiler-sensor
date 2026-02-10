@@ -59,12 +59,12 @@ No other code changes required - the GPIO layer handles all hardware abstraction
 
 ## MQTT
 
-**Topic:** `energy/BOILER_SENSOR/SENSOR/heating`
+**Topic:** `energy/boiler/sensor/events`
 
 **Payload Example:**
 ```json
 {
-  "heating": {
+  "boiler": {
     "timestamp": "2026-02-02T22:18:12Z",
     "event": "CH_ON",
     "ch": { "state": "ON" },

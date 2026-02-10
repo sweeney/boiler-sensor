@@ -27,17 +27,17 @@ func TestFormatPayload(t *testing.T) {
 		t.Fatalf("invalid JSON: %v", err)
 	}
 
-	if parsed.Heating.Timestamp != "2026-02-02T22:18:12Z" {
-		t.Errorf("unexpected timestamp: %s", parsed.Heating.Timestamp)
+	if parsed.Boiler.Timestamp != "2026-02-02T22:18:12Z" {
+		t.Errorf("unexpected timestamp: %s", parsed.Boiler.Timestamp)
 	}
-	if parsed.Heating.Event != "CH_ON" {
-		t.Errorf("unexpected event: %s", parsed.Heating.Event)
+	if parsed.Boiler.Event != "CH_ON" {
+		t.Errorf("unexpected event: %s", parsed.Boiler.Event)
 	}
-	if parsed.Heating.CH.State != "ON" {
-		t.Errorf("unexpected CH state: %s", parsed.Heating.CH.State)
+	if parsed.Boiler.CH.State != "ON" {
+		t.Errorf("unexpected CH state: %s", parsed.Boiler.CH.State)
 	}
-	if parsed.Heating.HW.State != "OFF" {
-		t.Errorf("unexpected HW state: %s", parsed.Heating.HW.State)
+	if parsed.Boiler.HW.State != "OFF" {
+		t.Errorf("unexpected HW state: %s", parsed.Boiler.HW.State)
 	}
 }
 
@@ -75,14 +75,14 @@ func TestFormatPayloadAllEventTypes(t *testing.T) {
 				t.Fatalf("invalid JSON: %v", err)
 			}
 
-			if parsed.Heating.Event != tt.wantEvent {
-				t.Errorf("event: got %s, want %s", parsed.Heating.Event, tt.wantEvent)
+			if parsed.Boiler.Event != tt.wantEvent {
+				t.Errorf("event: got %s, want %s", parsed.Boiler.Event, tt.wantEvent)
 			}
-			if parsed.Heating.CH.State != tt.wantCH {
-				t.Errorf("CH: got %s, want %s", parsed.Heating.CH.State, tt.wantCH)
+			if parsed.Boiler.CH.State != tt.wantCH {
+				t.Errorf("CH: got %s, want %s", parsed.Boiler.CH.State, tt.wantCH)
 			}
-			if parsed.Heating.HW.State != tt.wantHW {
-				t.Errorf("HW: got %s, want %s", parsed.Heating.HW.State, tt.wantHW)
+			if parsed.Boiler.HW.State != tt.wantHW {
+				t.Errorf("HW: got %s, want %s", parsed.Boiler.HW.State, tt.wantHW)
 			}
 		})
 	}
@@ -184,14 +184,14 @@ func TestFakePublisherReset(t *testing.T) {
 }
 
 func TestTopic(t *testing.T) {
-	expected := "energy/BOILER_SENSOR/SENSOR/heating"
+	expected := "energy/boiler/sensor/events"
 	if Topic != expected {
 		t.Errorf("unexpected topic: got %s, want %s", Topic, expected)
 	}
 }
 
 func TestTopicSystem(t *testing.T) {
-	expected := "energy/BOILER_SENSOR/SENSOR/system"
+	expected := "energy/boiler/sensor/system"
 	if TopicSystem != expected {
 		t.Errorf("unexpected system topic: got %s, want %s", TopicSystem, expected)
 	}
@@ -483,8 +483,8 @@ func TestFormatPayloadTimezoneConversion(t *testing.T) {
 	}
 
 	// Should be converted to UTC
-	if parsed.Heating.Timestamp != "2026-02-03T15:30:00Z" {
-		t.Errorf("expected UTC timestamp 2026-02-03T15:30:00Z, got %s", parsed.Heating.Timestamp)
+	if parsed.Boiler.Timestamp != "2026-02-03T15:30:00Z" {
+		t.Errorf("expected UTC timestamp 2026-02-03T15:30:00Z, got %s", parsed.Boiler.Timestamp)
 	}
 }
 
@@ -649,18 +649,18 @@ func TestPayloadRoundTrip(t *testing.T) {
 	}
 
 	// Verify round-trip preserves data
-	if parsed.Heating.Event != string(original.Type) {
-		t.Errorf("event type mismatch: got %s, want %s", parsed.Heating.Event, original.Type)
+	if parsed.Boiler.Event != string(original.Type) {
+		t.Errorf("event type mismatch: got %s, want %s", parsed.Boiler.Event, original.Type)
 	}
-	if parsed.Heating.CH.State != string(original.CHState) {
-		t.Errorf("CH state mismatch: got %s, want %s", parsed.Heating.CH.State, original.CHState)
+	if parsed.Boiler.CH.State != string(original.CHState) {
+		t.Errorf("CH state mismatch: got %s, want %s", parsed.Boiler.CH.State, original.CHState)
 	}
-	if parsed.Heating.HW.State != string(original.HWState) {
-		t.Errorf("HW state mismatch: got %s, want %s", parsed.Heating.HW.State, original.HWState)
+	if parsed.Boiler.HW.State != string(original.HWState) {
+		t.Errorf("HW state mismatch: got %s, want %s", parsed.Boiler.HW.State, original.HWState)
 	}
 
 	// Parse the timestamp back
-	parsedTime, err := time.Parse(time.RFC3339, parsed.Heating.Timestamp)
+	parsedTime, err := time.Parse(time.RFC3339, parsed.Boiler.Timestamp)
 	if err != nil {
 		t.Fatalf("timestamp parse error: %v", err)
 	}

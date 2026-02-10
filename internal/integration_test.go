@@ -106,10 +106,10 @@ func TestIntegrationFullFlow(t *testing.T) {
 		if err := json.Unmarshal(payload, &parsed); err != nil {
 			t.Errorf("payload %d: invalid JSON: %v", i, err)
 		}
-		if parsed.Heating.Timestamp == "" {
+		if parsed.Boiler.Timestamp == "" {
 			t.Errorf("payload %d: missing timestamp", i)
 		}
-		if parsed.Heating.Event == "" {
+		if parsed.Boiler.Event == "" {
 			t.Errorf("payload %d: missing event", i)
 		}
 	}
@@ -271,7 +271,7 @@ func TestIntegrationPayloadFormat(t *testing.T) {
 	publisher := mqtt.NewFakePublisher()
 	publisher.Publish(event)
 
-	expected := `{"heating":{"timestamp":"2026-02-02T22:18:12Z","event":"CH_ON","ch":{"state":"ON"},"hw":{"state":"OFF"}}}`
+	expected := `{"boiler":{"timestamp":"2026-02-02T22:18:12Z","event":"CH_ON","ch":{"state":"ON"},"hw":{"state":"OFF"}}}`
 
 	if string(publisher.Payloads[0]) != expected {
 		t.Errorf("unexpected payload:\ngot:  %s\nwant: %s", string(publisher.Payloads[0]), expected)

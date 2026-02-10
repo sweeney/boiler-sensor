@@ -6,7 +6,7 @@ import (
 
 // FakePublisher records published events for test assertions.
 type FakePublisher struct {
-	// Events contains all heating events that were published.
+	// Events contains all boiler events that were published.
 	Events []logic.Event
 
 	// Payloads contains the JSON payloads that were published.
@@ -36,7 +36,7 @@ func NewFakePublisher() *FakePublisher {
 	return &FakePublisher{}
 }
 
-// Publish records the heating event.
+// Publish records the boiler event.
 func (f *FakePublisher) Publish(event logic.Event) error {
 	if f.PublishError != nil {
 		return f.PublishError

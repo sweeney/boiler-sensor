@@ -8,15 +8,15 @@ import (
 	"github.com/sweeney/boiler-sensor/internal/logic"
 )
 
-// Topic is the MQTT topic for heating events.
-const Topic = "energy/BOILER_SENSOR/SENSOR/heating"
+// Topic is the MQTT topic for boiler events.
+const Topic = "energy/boiler/sensor/events"
 
 // TopicSystem is the MQTT topic for system lifecycle events.
-const TopicSystem = "energy/BOILER_SENSOR/SENSOR/system"
+const TopicSystem = "energy/boiler/sensor/system"
 
 // Publisher publishes events to MQTT.
 type Publisher interface {
-	// Publish sends a heating event to the broker.
+	// Publish sends a boiler event to the broker.
 	// Returns error if publishing fails (should not crash the process).
 	Publish(event logic.Event) error
 
@@ -43,11 +43,11 @@ type SystemEvent struct {
 
 // Payload represents the MQTT message payload structure.
 type Payload struct {
-	Heating HeatingPayload `json:"heating"`
+	Boiler BoilerPayload `json:"boiler"`
 }
 
-// HeatingPayload contains the heating event details.
-type HeatingPayload struct {
+// BoilerPayload contains the boiler event details.
+type BoilerPayload struct {
 	Timestamp string       `json:"timestamp"`
 	Event     string       `json:"event"`
 	CH        ChannelState `json:"ch"`
@@ -59,10 +59,10 @@ type ChannelState struct {
 	State string `json:"state"`
 }
 
-// FormatPayload creates the JSON payload for a heating event.
+// FormatPayload creates the JSON payload for a boiler event.
 func FormatPayload(event logic.Event) ([]byte, error) {
 	payload := Payload{
-		Heating: HeatingPayload{
+		Boiler: BoilerPayload{
 			Timestamp: event.Timestamp.UTC().Format(time.RFC3339),
 			Event:     string(event.Type),
 			CH:        ChannelState{State: string(event.CHState)},
