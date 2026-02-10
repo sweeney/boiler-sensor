@@ -9,6 +9,7 @@ import (
 	"github.com/sweeney/boiler-sensor/internal/gpio"
 	"github.com/sweeney/boiler-sensor/internal/logic"
 	"github.com/sweeney/boiler-sensor/internal/mqtt"
+	"github.com/sweeney/boiler-sensor/internal/status"
 )
 
 // TestIntegrationFullFlow tests the complete flow from GPIO to MQTT using fakes.
@@ -449,20 +450,27 @@ func TestIntegrationShutdownPublishFailureLogsButContinues(t *testing.T) {
 	}
 }
 
-// TestIntegrationStartupEvent verifies startup event with config.
-func TestIntegrationStartupEvent(t *testing.T) {
+// TestIntegrationStartupEventWithRawPayload verifies startup event using RawPayload from status tracker.
+func TestIntegrationStartupEventWithRawPayload(t *testing.T) {
 	publisher := mqtt.NewFakePublisher()
+	startTime := time.Date(2026, 2, 3, 19, 5, 51, 0, time.UTC)
 
-	startupTime := time.Date(2026, 2, 3, 19, 5, 51, 0, time.UTC)
+	tracker := status.NewTracker(startTime, status.Config{
+		PollMs:      100,
+		DebounceMs:  250,
+		HeartbeatMs: 900000,
+		Broker:      "tcp://192.168.1.200:1883",
+		HTTPPort:    ":80",
+	})
+
+	snap := tracker.Snapshot()
+	raw := status.FormatStatusEvent(snap, "STARTUP", "")
+
 	event := mqtt.SystemEvent{
-		Timestamp: startupTime,
-		Event:     "STARTUP",
-		Config: &mqtt.SystemConfig{
-			PollMs:      100,
-			DebounceMs:  250,
-			HeartbeatMs: 900000,
-			Broker:      "tcp://192.168.1.200:1883",
-		},
+		Timestamp:  startTime,
+		Event:      "STARTUP",
+		RawPayload: raw,
+		Retained:   true,
 	}
 
 	err := publisher.PublishSystem(event)
@@ -477,62 +485,20 @@ func TestIntegrationStartupEvent(t *testing.T) {
 	if publisher.SystemEvents[0].Event != "STARTUP" {
 		t.Errorf("expected STARTUP event, got %s", publisher.SystemEvents[0].Event)
 	}
-	if publisher.SystemEvents[0].Config == nil {
-		t.Fatal("expected config to be present")
-	}
-	if publisher.SystemEvents[0].Config.PollMs != 100 {
-		t.Errorf("expected PollMs 100, got %d", publisher.SystemEvents[0].Config.PollMs)
-	}
-	if publisher.SystemEvents[0].Config.DebounceMs != 250 {
-		t.Errorf("expected DebounceMs 250, got %d", publisher.SystemEvents[0].Config.DebounceMs)
-	}
-	if publisher.SystemEvents[0].Config.HeartbeatMs != 900000 {
-		t.Errorf("expected HeartbeatMs 900000, got %d", publisher.SystemEvents[0].Config.HeartbeatMs)
-	}
-	if publisher.SystemEvents[0].Config.Broker != "tcp://192.168.1.200:1883" {
-		t.Errorf("expected broker tcp://192.168.1.200:1883, got %s", publisher.SystemEvents[0].Config.Broker)
-	}
 
-	// Verify JSON payload structure
-	var parsed mqtt.SystemPayload
+	// Verify JSON payload contains status snapshot with event field
+	var parsed status.StatusJSON
 	if err := json.Unmarshal(publisher.SystemPayloads[0], &parsed); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	if parsed.System.Event != "STARTUP" {
-		t.Errorf("payload event: expected STARTUP, got %s", parsed.System.Event)
+	if parsed.Status.Event != "STARTUP" {
+		t.Errorf("payload event: expected STARTUP, got %s", parsed.Status.Event)
 	}
-	if parsed.System.Config == nil {
-		t.Fatal("payload config should be present")
+	if parsed.Status.Config.PollMs != 100 {
+		t.Errorf("payload poll_ms: expected 100, got %d", parsed.Status.Config.PollMs)
 	}
-	if parsed.System.Config.PollMs != 100 {
-		t.Errorf("payload poll_ms: expected 100, got %d", parsed.System.Config.PollMs)
-	}
-	if parsed.System.Config.HeartbeatMs != 900000 {
-		t.Errorf("payload heartbeat_ms: expected 900000, got %d", parsed.System.Config.HeartbeatMs)
-	}
-}
-
-// TestIntegrationStartupPayloadFormat verifies the exact JSON structure for startup events.
-func TestIntegrationStartupPayloadFormat(t *testing.T) {
-	publisher := mqtt.NewFakePublisher()
-
-	event := mqtt.SystemEvent{
-		Timestamp: time.Date(2026, 2, 3, 19, 5, 51, 0, time.UTC),
-		Event:     "STARTUP",
-		Config: &mqtt.SystemConfig{
-			PollMs:      100,
-			DebounceMs:  250,
-			HeartbeatMs: 900000,
-			Broker:      "tcp://192.168.1.200:1883",
-		},
-	}
-
-	publisher.PublishSystem(event)
-
-	expected := `{"system":{"timestamp":"2026-02-03T19:05:51Z","event":"STARTUP","config":{"poll_ms":100,"debounce_ms":250,"heartbeat_ms":900000,"broker":"tcp://192.168.1.200:1883"}}}`
-
-	if string(publisher.SystemPayloads[0]) != expected {
-		t.Errorf("unexpected payload:\ngot:  %s\nwant: %s", string(publisher.SystemPayloads[0]), expected)
+	if parsed.Status.Config.Broker != "tcp://192.168.1.200:1883" {
+		t.Errorf("payload broker: expected tcp://192.168.1.200:1883, got %s", parsed.Status.Config.Broker)
 	}
 }
 
@@ -544,12 +510,7 @@ func TestIntegrationStartupThenShutdown(t *testing.T) {
 	startupEvent := mqtt.SystemEvent{
 		Timestamp: time.Date(2026, 2, 3, 19, 5, 51, 0, time.UTC),
 		Event:     "STARTUP",
-		Config: &mqtt.SystemConfig{
-			PollMs:      100,
-			DebounceMs:  250,
-			HeartbeatMs: 900000,
-			Broker:      "tcp://192.168.1.200:1883",
-		},
+		Retained:  true,
 	}
 	if err := publisher.PublishSystem(startupEvent); err != nil {
 		t.Fatalf("startup publish error: %v", err)
@@ -592,139 +553,56 @@ func TestIntegrationStartupThenShutdown(t *testing.T) {
 		t.Errorf("second system event should be SHUTDOWN, got %s", publisher.SystemEvents[1].Event)
 	}
 
-	// Verify startup has config, shutdown has reason
-	if publisher.SystemEvents[0].Config == nil {
-		t.Error("startup event should have config")
-	}
 	if publisher.SystemEvents[1].Reason != "SIGTERM" {
 		t.Errorf("shutdown event should have reason SIGTERM, got %s", publisher.SystemEvents[1].Reason)
 	}
 }
 
-// TestIntegrationHeartbeatPayloadFormat verifies the exact JSON structure for heartbeat events.
-func TestIntegrationHeartbeatPayloadFormat(t *testing.T) {
+// TestIntegrationHeartbeatWithRawPayload verifies heartbeat uses status snapshot format.
+func TestIntegrationHeartbeatWithRawPayload(t *testing.T) {
 	publisher := mqtt.NewFakePublisher()
+	startTime := time.Date(2026, 2, 4, 12, 0, 0, 0, time.UTC)
+
+	tracker := status.NewTracker(startTime, status.Config{
+		PollMs:      100,
+		DebounceMs:  250,
+		HeartbeatMs: 900000,
+		Broker:      "tcp://192.168.1.200:1883",
+		HTTPPort:    ":80",
+	})
+	tracker.Update(logic.StateOn, logic.StateOff, true, logic.EventCounts{CHOn: 5, CHOff: 4, HWOn: 2, HWOff: 2})
+	tracker.SetMQTTConnected(true)
+
+	snap := tracker.Snapshot()
+	raw := status.FormatStatusEvent(snap, "HEARTBEAT", "")
 
 	event := mqtt.SystemEvent{
-		Timestamp: time.Date(2026, 2, 4, 12, 15, 0, 0, time.UTC),
-		Event:     "HEARTBEAT",
-		Heartbeat: &mqtt.HeartbeatInfo{
-			UptimeSeconds: 900,
-			EventCounts: mqtt.HeartbeatCounts{
-				CHOn:  5,
-				CHOff: 4,
-				HWOn:  2,
-				HWOff: 2,
-			},
-		},
+		Timestamp:  snap.Now,
+		Event:      "HEARTBEAT",
+		RawPayload: raw,
 	}
 
 	publisher.PublishSystem(event)
 
-	expected := `{"system":{"timestamp":"2026-02-04T12:15:00Z","event":"HEARTBEAT","heartbeat":{"uptime_seconds":900,"event_counts":{"ch_on":5,"ch_off":4,"hw_on":2,"hw_off":2}}}}`
-
-	if string(publisher.SystemPayloads[0]) != expected {
-		t.Errorf("unexpected payload:\ngot:  %s\nwant: %s", string(publisher.SystemPayloads[0]), expected)
-	}
-}
-
-// TestIntegrationStartupWithNetworkInfo verifies startup event includes network info.
-func TestIntegrationStartupWithNetworkInfo(t *testing.T) {
-	publisher := mqtt.NewFakePublisher()
-
-	event := mqtt.SystemEvent{
-		Timestamp: time.Date(2026, 2, 3, 19, 5, 51, 0, time.UTC),
-		Event:     "STARTUP",
-		Config: &mqtt.SystemConfig{
-			PollMs:      100,
-			DebounceMs:  250,
-			HeartbeatMs: 900000,
-			Broker:      "tcp://192.168.1.200:1883",
-		},
-		Network: &mqtt.NetworkInfo{
-			Type:       "wifi",
-			IP:         "192.168.1.100",
-			Status:     "connected",
-			Gateway:    "192.168.1.1",
-			WifiStatus: "connected",
-			SSID:       "MyNetwork",
-		},
-	}
-
-	if err := publisher.PublishSystem(event); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Verify JSON payload contains network object
-	var parsed mqtt.SystemPayload
+	var parsed status.StatusJSON
 	if err := json.Unmarshal(publisher.SystemPayloads[0], &parsed); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
 
-	if parsed.System.Network == nil {
-		t.Fatal("expected network to be present in startup payload")
+	if parsed.Status.Event != "HEARTBEAT" {
+		t.Errorf("expected HEARTBEAT, got %s", parsed.Status.Event)
 	}
-	if parsed.System.Network.Type != "wifi" {
-		t.Errorf("network type: expected wifi, got %s", parsed.System.Network.Type)
+	if parsed.Status.CH != "ON" {
+		t.Errorf("expected CH=ON, got %s", parsed.Status.CH)
 	}
-	if parsed.System.Network.IP != "192.168.1.100" {
-		t.Errorf("network ip: expected 192.168.1.100, got %s", parsed.System.Network.IP)
+	if parsed.Status.HW != "OFF" {
+		t.Errorf("expected HW=OFF, got %s", parsed.Status.HW)
 	}
-	if parsed.System.Network.SSID != "MyNetwork" {
-		t.Errorf("network ssid: expected MyNetwork, got %s", parsed.System.Network.SSID)
+	if parsed.Status.Counts.CHOn != 5 {
+		t.Errorf("expected ch_on=5, got %d", parsed.Status.Counts.CHOn)
 	}
-}
-
-// TestIntegrationHeartbeatWithNetworkInfo verifies heartbeat event includes network info.
-func TestIntegrationHeartbeatWithNetworkInfo(t *testing.T) {
-	publisher := mqtt.NewFakePublisher()
-
-	event := mqtt.SystemEvent{
-		Timestamp: time.Date(2026, 2, 4, 12, 15, 0, 0, time.UTC),
-		Event:     "HEARTBEAT",
-		Heartbeat: &mqtt.HeartbeatInfo{
-			UptimeSeconds: 900,
-			EventCounts: mqtt.HeartbeatCounts{
-				CHOn:  5,
-				CHOff: 4,
-				HWOn:  2,
-				HWOff: 2,
-			},
-		},
-		Network: &mqtt.NetworkInfo{
-			Type:       "ethernet",
-			IP:         "10.0.0.50",
-			Status:     "connected",
-			Gateway:    "10.0.0.1",
-			WifiStatus: "disabled",
-			SSID:       "",
-		},
-	}
-
-	if err := publisher.PublishSystem(event); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Verify JSON payload contains network object
-	var parsed mqtt.SystemPayload
-	if err := json.Unmarshal(publisher.SystemPayloads[0], &parsed); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-
-	if parsed.System.Heartbeat == nil {
-		t.Fatal("expected heartbeat to be present")
-	}
-	if parsed.System.Network == nil {
-		t.Fatal("expected network to be present in heartbeat payload")
-	}
-	if parsed.System.Network.Type != "ethernet" {
-		t.Errorf("network type: expected ethernet, got %s", parsed.System.Network.Type)
-	}
-	if parsed.System.Network.IP != "10.0.0.50" {
-		t.Errorf("network ip: expected 10.0.0.50, got %s", parsed.System.Network.IP)
-	}
-	if parsed.System.Network.Gateway != "10.0.0.1" {
-		t.Errorf("network gateway: expected 10.0.0.1, got %s", parsed.System.Network.Gateway)
+	if !parsed.Status.MQTT.Connected {
+		t.Error("expected MQTT connected=true")
 	}
 }
 
@@ -736,12 +614,6 @@ func TestIntegrationStartupEventIsRetained(t *testing.T) {
 		Timestamp: time.Now(),
 		Event:     "STARTUP",
 		Retained:  true,
-		Config: &mqtt.SystemConfig{
-			PollMs:      100,
-			DebounceMs:  250,
-			HeartbeatMs: 900000,
-			Broker:      "tcp://192.168.1.200:1883",
-		},
 	}
 
 	if err := publisher.PublishSystem(event); err != nil {
@@ -780,10 +652,6 @@ func TestIntegrationHeartbeatEventIsNotRetained(t *testing.T) {
 	event := mqtt.SystemEvent{
 		Timestamp: time.Now(),
 		Event:     "HEARTBEAT",
-		Heartbeat: &mqtt.HeartbeatInfo{
-			UptimeSeconds: 900,
-			EventCounts:   mqtt.HeartbeatCounts{},
-		},
 	}
 
 	if err := publisher.PublishSystem(event); err != nil {
@@ -798,6 +666,7 @@ func TestIntegrationHeartbeatEventIsNotRetained(t *testing.T) {
 // TestIntegrationWillPayloadFormat verifies the will payload JSON matches expected structure.
 func TestIntegrationWillPayloadFormat(t *testing.T) {
 	// The will payload is a SHUTDOWN event with reason MQTT_DISCONNECT
+	// LWT uses the simple format (no RawPayload, no tracker access)
 	event := mqtt.SystemEvent{
 		Timestamp: time.Date(2026, 2, 10, 8, 30, 0, 0, time.UTC),
 		Event:     "SHUTDOWN",
@@ -819,12 +688,6 @@ func TestIntegrationWillPayloadFormat(t *testing.T) {
 	}
 	if parsed.System.Reason != "MQTT_DISCONNECT" {
 		t.Errorf("expected MQTT_DISCONNECT reason, got %s", parsed.System.Reason)
-	}
-	if parsed.System.Config != nil {
-		t.Error("will payload should not contain config")
-	}
-	if parsed.System.Heartbeat != nil {
-		t.Error("will payload should not contain heartbeat")
 	}
 }
 
@@ -859,15 +722,6 @@ func TestIntegrationReconnectedEventFormat(t *testing.T) {
 	system := parsed["system"].(map[string]interface{})
 	if _, exists := system["reason"]; exists {
 		t.Error("RECONNECTED should not have reason field")
-	}
-	if _, exists := system["config"]; exists {
-		t.Error("RECONNECTED should not have config field")
-	}
-	if _, exists := system["heartbeat"]; exists {
-		t.Error("RECONNECTED should not have heartbeat field")
-	}
-	if _, exists := system["network"]; exists {
-		t.Error("RECONNECTED should not have network field")
 	}
 
 	// Verify retained flag is preserved
@@ -925,26 +779,22 @@ func TestIntegrationHeartbeatAfterTransitions(t *testing.T) {
 		t.Fatalf("expected 2 heating events, got %d", len(publisher.Events))
 	}
 
-	// Check heartbeat after 15 minutes
-	heartbeatTime := startTime.Add(15 * time.Minute)
-	hbData := detector.CheckHeartbeat(heartbeatTime, 15*time.Minute)
-	if hbData == nil {
-		t.Fatal("expected heartbeat data")
-	}
+	// Build heartbeat using status tracker (new format)
+	tracker := status.NewTracker(startTime, status.Config{
+		PollMs:     100,
+		DebounceMs: 250,
+		Broker:     "tcp://localhost:1883",
+	})
+	chState, hwState := detector.CurrentState()
+	tracker.Update(chState, hwState, detector.IsBaselined(), detector.EventCountsSnapshot())
 
-	// Create and publish heartbeat event
+	snap := tracker.Snapshot()
+	raw := status.FormatStatusEvent(snap, "HEARTBEAT", "")
+
 	heartbeatEvent := mqtt.SystemEvent{
-		Timestamp: heartbeatTime,
-		Event:     "HEARTBEAT",
-		Heartbeat: &mqtt.HeartbeatInfo{
-			UptimeSeconds: int64(hbData.Uptime.Seconds()),
-			EventCounts: mqtt.HeartbeatCounts{
-				CHOn:  hbData.Counts.CHOn,
-				CHOff: hbData.Counts.CHOff,
-				HWOn:  hbData.Counts.HWOn,
-				HWOff: hbData.Counts.HWOff,
-			},
-		},
+		Timestamp:  snap.Now,
+		Event:      "HEARTBEAT",
+		RawPayload: raw,
 	}
 
 	if err := publisher.PublishSystem(heartbeatEvent); err != nil {
@@ -958,28 +808,19 @@ func TestIntegrationHeartbeatAfterTransitions(t *testing.T) {
 	if publisher.SystemEvents[0].Event != "HEARTBEAT" {
 		t.Errorf("expected HEARTBEAT, got %s", publisher.SystemEvents[0].Event)
 	}
-	if publisher.SystemEvents[0].Heartbeat == nil {
-		t.Fatal("expected heartbeat info")
-	}
-	if publisher.SystemEvents[0].Heartbeat.EventCounts.CHOn != 1 {
-		t.Errorf("expected ch_on=1, got %d", publisher.SystemEvents[0].Heartbeat.EventCounts.CHOn)
-	}
-	if publisher.SystemEvents[0].Heartbeat.EventCounts.HWOn != 1 {
-		t.Errorf("expected hw_on=1, got %d", publisher.SystemEvents[0].Heartbeat.EventCounts.HWOn)
-	}
-	if publisher.SystemEvents[0].Heartbeat.UptimeSeconds != 900 {
-		t.Errorf("expected uptime_seconds=900, got %d", publisher.SystemEvents[0].Heartbeat.UptimeSeconds)
-	}
 
-	// Verify JSON payload
-	var parsed mqtt.SystemPayload
+	// Verify JSON payload has new status format
+	var parsed status.StatusJSON
 	if err := json.Unmarshal(publisher.SystemPayloads[0], &parsed); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	if parsed.System.Heartbeat == nil {
-		t.Fatal("expected heartbeat in payload")
+	if parsed.Status.Event != "HEARTBEAT" {
+		t.Errorf("expected event=HEARTBEAT, got %s", parsed.Status.Event)
 	}
-	if parsed.System.Heartbeat.EventCounts.CHOn != 1 {
-		t.Errorf("payload ch_on: expected 1, got %d", parsed.System.Heartbeat.EventCounts.CHOn)
+	if parsed.Status.Counts.CHOn != 1 {
+		t.Errorf("expected ch_on=1, got %d", parsed.Status.Counts.CHOn)
+	}
+	if parsed.Status.Counts.HWOn != 1 {
+		t.Errorf("expected hw_on=1, got %d", parsed.Status.Counts.HWOn)
 	}
 }

@@ -278,16 +278,12 @@ func TestFormatSystemPayloadAllSignals(t *testing.T) {
 	}
 }
 
-func TestFormatSystemPayloadStartup(t *testing.T) {
+func TestFormatSystemPayloadRawPayloadBypass(t *testing.T) {
+	raw := []byte(`{"status":{"event":"STARTUP","ch":"OFF","hw":"OFF"}}`)
 	event := SystemEvent{
-		Timestamp: time.Date(2026, 2, 3, 19, 5, 51, 0, time.UTC),
-		Event:     "STARTUP",
-		Config: &SystemConfig{
-			PollMs:      100,
-			DebounceMs:  250,
-			HeartbeatMs: 900000,
-			Broker:      "tcp://192.168.1.200:1883",
-		},
+		Timestamp:  time.Date(2026, 2, 3, 19, 5, 51, 0, time.UTC),
+		Event:      "STARTUP",
+		RawPayload: raw,
 	}
 
 	payload, err := FormatSystemPayload(event)
@@ -295,66 +291,16 @@ func TestFormatSystemPayloadStartup(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var parsed SystemPayload
-	if err := json.Unmarshal(payload, &parsed); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-
-	if parsed.System.Timestamp != "2026-02-03T19:05:51Z" {
-		t.Errorf("unexpected timestamp: %s", parsed.System.Timestamp)
-	}
-	if parsed.System.Event != "STARTUP" {
-		t.Errorf("unexpected event: %s", parsed.System.Event)
-	}
-	if parsed.System.Reason != "" {
-		t.Errorf("expected empty reason for startup, got: %s", parsed.System.Reason)
-	}
-	if parsed.System.Config == nil {
-		t.Fatal("expected config to be present")
-	}
-	if parsed.System.Config.PollMs != 100 {
-		t.Errorf("unexpected poll_ms: %d", parsed.System.Config.PollMs)
-	}
-	if parsed.System.Config.DebounceMs != 250 {
-		t.Errorf("unexpected debounce_ms: %d", parsed.System.Config.DebounceMs)
-	}
-	if parsed.System.Config.HeartbeatMs != 900000 {
-		t.Errorf("unexpected heartbeat_ms: %d", parsed.System.Config.HeartbeatMs)
-	}
-	if parsed.System.Config.Broker != "tcp://192.168.1.200:1883" {
-		t.Errorf("unexpected broker: %s", parsed.System.Config.Broker)
+	if string(payload) != string(raw) {
+		t.Errorf("expected RawPayload to be returned directly:\ngot:  %s\nwant: %s", string(payload), string(raw))
 	}
 }
 
-func TestFormatSystemPayloadStartupExactJSON(t *testing.T) {
-	event := SystemEvent{
-		Timestamp: time.Date(2026, 2, 3, 19, 5, 51, 0, time.UTC),
-		Event:     "STARTUP",
-		Config: &SystemConfig{
-			PollMs:      100,
-			DebounceMs:  250,
-			HeartbeatMs: 900000,
-			Broker:      "tcp://192.168.1.200:1883",
-		},
-	}
-
-	payload, err := FormatSystemPayload(event)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	expected := `{"system":{"timestamp":"2026-02-03T19:05:51Z","event":"STARTUP","config":{"poll_ms":100,"debounce_ms":250,"heartbeat_ms":900000,"broker":"tcp://192.168.1.200:1883"}}}`
-	if string(payload) != expected {
-		t.Errorf("unexpected payload:\ngot:  %s\nwant: %s", string(payload), expected)
-	}
-}
-
-func TestFormatSystemPayloadShutdownOmitsConfig(t *testing.T) {
+func TestFormatSystemPayloadNilRawPayloadFallback(t *testing.T) {
 	event := SystemEvent{
 		Timestamp: time.Date(2026, 2, 3, 19, 10, 0, 0, time.UTC),
 		Event:     "SHUTDOWN",
 		Reason:    "SIGTERM",
-		Config:    nil,
 	}
 
 	payload, err := FormatSystemPayload(event)
@@ -362,7 +308,6 @@ func TestFormatSystemPayloadShutdownOmitsConfig(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Config should be omitted from JSON
 	expected := `{"system":{"timestamp":"2026-02-03T19:10:00Z","event":"SHUTDOWN","reason":"SIGTERM"}}`
 	if string(payload) != expected {
 		t.Errorf("unexpected payload:\ngot:  %s\nwant: %s", string(payload), expected)
@@ -373,13 +318,7 @@ func TestFormatSystemPayloadStartupOmitsReason(t *testing.T) {
 	event := SystemEvent{
 		Timestamp: time.Date(2026, 2, 3, 19, 5, 51, 0, time.UTC),
 		Event:     "STARTUP",
-		Reason:    "", // Empty reason should be omitted
-		Config: &SystemConfig{
-			PollMs:      100,
-			DebounceMs:  250,
-			HeartbeatMs: 900000,
-			Broker:      "tcp://192.168.1.200:1883",
-		},
+		Reason:    "",
 	}
 
 	payload, err := FormatSystemPayload(event)
@@ -387,7 +326,6 @@ func TestFormatSystemPayloadStartupOmitsReason(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Reason should be omitted from JSON (no "reason":"")
 	var parsed map[string]interface{}
 	if err := json.Unmarshal(payload, &parsed); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
@@ -764,202 +702,6 @@ func TestSystemPayloadRoundTrip(t *testing.T) {
 	}
 }
 
-func TestFormatSystemPayloadHeartbeat(t *testing.T) {
-	event := SystemEvent{
-		Timestamp: time.Date(2026, 2, 4, 12, 15, 0, 0, time.UTC),
-		Event:     "HEARTBEAT",
-		Heartbeat: &HeartbeatInfo{
-			UptimeSeconds: 900,
-			EventCounts: HeartbeatCounts{
-				CHOn:  5,
-				CHOff: 4,
-				HWOn:  2,
-				HWOff: 2,
-			},
-		},
-	}
-
-	payload, err := FormatSystemPayload(event)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var parsed SystemPayload
-	if err := json.Unmarshal(payload, &parsed); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-
-	if parsed.System.Timestamp != "2026-02-04T12:15:00Z" {
-		t.Errorf("unexpected timestamp: %s", parsed.System.Timestamp)
-	}
-	if parsed.System.Event != "HEARTBEAT" {
-		t.Errorf("unexpected event: %s", parsed.System.Event)
-	}
-	if parsed.System.Heartbeat == nil {
-		t.Fatal("expected heartbeat to be present")
-	}
-	if parsed.System.Heartbeat.UptimeSeconds != 900 {
-		t.Errorf("unexpected uptime_seconds: %d", parsed.System.Heartbeat.UptimeSeconds)
-	}
-	if parsed.System.Heartbeat.EventCounts.CHOn != 5 {
-		t.Errorf("unexpected ch_on: %d", parsed.System.Heartbeat.EventCounts.CHOn)
-	}
-	if parsed.System.Heartbeat.EventCounts.CHOff != 4 {
-		t.Errorf("unexpected ch_off: %d", parsed.System.Heartbeat.EventCounts.CHOff)
-	}
-	if parsed.System.Heartbeat.EventCounts.HWOn != 2 {
-		t.Errorf("unexpected hw_on: %d", parsed.System.Heartbeat.EventCounts.HWOn)
-	}
-	if parsed.System.Heartbeat.EventCounts.HWOff != 2 {
-		t.Errorf("unexpected hw_off: %d", parsed.System.Heartbeat.EventCounts.HWOff)
-	}
-}
-
-func TestFormatSystemPayloadHeartbeatExactJSON(t *testing.T) {
-	event := SystemEvent{
-		Timestamp: time.Date(2026, 2, 4, 12, 15, 0, 0, time.UTC),
-		Event:     "HEARTBEAT",
-		Heartbeat: &HeartbeatInfo{
-			UptimeSeconds: 900,
-			EventCounts: HeartbeatCounts{
-				CHOn:  5,
-				CHOff: 4,
-				HWOn:  2,
-				HWOff: 2,
-			},
-		},
-	}
-
-	payload, err := FormatSystemPayload(event)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	expected := `{"system":{"timestamp":"2026-02-04T12:15:00Z","event":"HEARTBEAT","heartbeat":{"uptime_seconds":900,"event_counts":{"ch_on":5,"ch_off":4,"hw_on":2,"hw_off":2}}}}`
-	if string(payload) != expected {
-		t.Errorf("unexpected payload:\ngot:  %s\nwant: %s", string(payload), expected)
-	}
-}
-
-func TestFormatSystemPayloadHeartbeatOmitsOtherFields(t *testing.T) {
-	event := SystemEvent{
-		Timestamp: time.Date(2026, 2, 4, 12, 15, 0, 0, time.UTC),
-		Event:     "HEARTBEAT",
-		Heartbeat: &HeartbeatInfo{
-			UptimeSeconds: 900,
-			EventCounts:   HeartbeatCounts{},
-		},
-	}
-
-	payload, err := FormatSystemPayload(event)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Reason and Config should be omitted
-	var parsed map[string]interface{}
-	if err := json.Unmarshal(payload, &parsed); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-
-	system := parsed["system"].(map[string]interface{})
-	if _, exists := system["reason"]; exists {
-		t.Error("reason field should be omitted for heartbeat events")
-	}
-	if _, exists := system["config"]; exists {
-		t.Error("config field should be omitted for heartbeat events")
-	}
-}
-
-func TestFormatSystemPayloadStartupWithNetwork(t *testing.T) {
-	event := SystemEvent{
-		Timestamp: time.Date(2026, 2, 3, 19, 5, 51, 0, time.UTC),
-		Event:     "STARTUP",
-		Config: &SystemConfig{
-			PollMs:      100,
-			DebounceMs:  250,
-			HeartbeatMs: 900000,
-			Broker:      "tcp://192.168.1.200:1883",
-		},
-		Network: &NetworkInfo{
-			Type:       "wifi",
-			IP:         "192.168.1.100",
-			Status:     "connected",
-			Gateway:    "192.168.1.1",
-			WifiStatus: "connected",
-			SSID:       "MyNetwork",
-		},
-	}
-
-	payload, err := FormatSystemPayload(event)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	expected := `{"system":{"timestamp":"2026-02-03T19:05:51Z","event":"STARTUP","config":{"poll_ms":100,"debounce_ms":250,"heartbeat_ms":900000,"broker":"tcp://192.168.1.200:1883"},"network":{"type":"wifi","ip":"192.168.1.100","status":"connected","gateway":"192.168.1.1","wifi_status":"connected","ssid":"MyNetwork"}}}`
-	if string(payload) != expected {
-		t.Errorf("unexpected payload:\ngot:  %s\nwant: %s", string(payload), expected)
-	}
-}
-
-func TestFormatSystemPayloadHeartbeatWithNetwork(t *testing.T) {
-	event := SystemEvent{
-		Timestamp: time.Date(2026, 2, 4, 12, 15, 0, 0, time.UTC),
-		Event:     "HEARTBEAT",
-		Heartbeat: &HeartbeatInfo{
-			UptimeSeconds: 900,
-			EventCounts: HeartbeatCounts{
-				CHOn:  5,
-				CHOff: 4,
-				HWOn:  2,
-				HWOff: 2,
-			},
-		},
-		Network: &NetworkInfo{
-			Type:       "wifi",
-			IP:         "192.168.1.100",
-			Status:     "connected",
-			Gateway:    "192.168.1.1",
-			WifiStatus: "connected",
-			SSID:       "MyNetwork",
-		},
-	}
-
-	payload, err := FormatSystemPayload(event)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	expected := `{"system":{"timestamp":"2026-02-04T12:15:00Z","event":"HEARTBEAT","heartbeat":{"uptime_seconds":900,"event_counts":{"ch_on":5,"ch_off":4,"hw_on":2,"hw_off":2}},"network":{"type":"wifi","ip":"192.168.1.100","status":"connected","gateway":"192.168.1.1","wifi_status":"connected","ssid":"MyNetwork"}}}`
-	if string(payload) != expected {
-		t.Errorf("unexpected payload:\ngot:  %s\nwant: %s", string(payload), expected)
-	}
-}
-
-func TestFormatSystemPayloadNetworkOmittedWhenNil(t *testing.T) {
-	event := SystemEvent{
-		Timestamp: time.Date(2026, 2, 3, 10, 30, 45, 0, time.UTC),
-		Event:     "SHUTDOWN",
-		Reason:    "SIGTERM",
-		Network:   nil,
-	}
-
-	payload, err := FormatSystemPayload(event)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var parsed map[string]interface{}
-	if err := json.Unmarshal(payload, &parsed); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-
-	system := parsed["system"].(map[string]interface{})
-	if _, exists := system["network"]; exists {
-		t.Error("network field should be omitted when nil")
-	}
-}
-
 func TestWillPayloadFormat(t *testing.T) {
 	event := SystemEvent{
 		Timestamp: time.Date(2026, 2, 10, 8, 30, 0, 0, time.UTC),
@@ -1009,7 +751,7 @@ func TestFormatSystemPayloadReconnected(t *testing.T) {
 		t.Errorf("unexpected payload:\ngot:  %s\nwant: %s", string(payload), expected)
 	}
 
-	// Verify no reason, config, heartbeat, or network
+	// Verify no reason
 	var parsed map[string]interface{}
 	if err := json.Unmarshal(payload, &parsed); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
@@ -1017,15 +759,6 @@ func TestFormatSystemPayloadReconnected(t *testing.T) {
 	system := parsed["system"].(map[string]interface{})
 	if _, exists := system["reason"]; exists {
 		t.Error("RECONNECTED should not have reason field")
-	}
-	if _, exists := system["config"]; exists {
-		t.Error("RECONNECTED should not have config field")
-	}
-	if _, exists := system["heartbeat"]; exists {
-		t.Error("RECONNECTED should not have heartbeat field")
-	}
-	if _, exists := system["network"]; exists {
-		t.Error("RECONNECTED should not have network field")
 	}
 }
 
@@ -1057,21 +790,14 @@ func TestFakePublisherRecordsRetainedFlag(t *testing.T) {
 	}
 }
 
-func TestFakePublisherPublishSystemHeartbeat(t *testing.T) {
+func TestFakePublisherRawPayloadPassthrough(t *testing.T) {
 	f := NewFakePublisher()
 
+	raw := []byte(`{"status":{"event":"HEARTBEAT","ch":"ON","hw":"OFF"}}`)
 	event := SystemEvent{
-		Timestamp: time.Now(),
-		Event:     "HEARTBEAT",
-		Heartbeat: &HeartbeatInfo{
-			UptimeSeconds: 900,
-			EventCounts: HeartbeatCounts{
-				CHOn:  1,
-				CHOff: 0,
-				HWOn:  0,
-				HWOff: 0,
-			},
-		},
+		Timestamp:  time.Now(),
+		Event:      "HEARTBEAT",
+		RawPayload: raw,
 	}
 
 	err := f.PublishSystem(event)
@@ -1079,17 +805,10 @@ func TestFakePublisherPublishSystemHeartbeat(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(f.SystemEvents) != 1 {
-		t.Fatalf("expected 1 system event, got %d", len(f.SystemEvents))
+	if len(f.SystemPayloads) != 1 {
+		t.Fatalf("expected 1 system payload, got %d", len(f.SystemPayloads))
 	}
-
-	if f.SystemEvents[0].Event != "HEARTBEAT" {
-		t.Errorf("unexpected event: %s", f.SystemEvents[0].Event)
-	}
-	if f.SystemEvents[0].Heartbeat == nil {
-		t.Fatal("expected heartbeat to be present")
-	}
-	if f.SystemEvents[0].Heartbeat.UptimeSeconds != 900 {
-		t.Errorf("unexpected uptime: %d", f.SystemEvents[0].Heartbeat.UptimeSeconds)
+	if string(f.SystemPayloads[0]) != string(raw) {
+		t.Errorf("expected RawPayload in system payloads:\ngot:  %s\nwant: %s", string(f.SystemPayloads[0]), string(raw))
 	}
 }

@@ -60,42 +60,30 @@ func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, p
 	publisher := mqtt.NewRealPublisher(broker)
 	defer publisher.Close()
 
-	// Publish startup event
-	startupEvent := mqtt.SystemEvent{
-		Timestamp: time.Now(),
-		Event:     "STARTUP",
-		Retained:  true,
-		Config: &mqtt.SystemConfig{
-			PollMs:      poll.Milliseconds(),
-			DebounceMs:  debounce.Milliseconds(),
-			HeartbeatMs: heartbeat.Milliseconds(),
-			Broker:      broker,
-		},
-		Network: readNetworkInfo(),
-	}
-	if err := publisher.PublishSystem(startupEvent); err != nil {
-		log.Printf("failed to publish startup event: %v", err)
-	} else {
-		log.Printf("published startup event")
-	}
-
-	// Initialize status tracker
+	// Initialize status tracker (before STARTUP so snapshot is available)
 	tracker := status.NewTracker(time.Now(), status.Config{
 		PollMs:      poll.Milliseconds(),
 		DebounceMs:  debounce.Milliseconds(),
 		HeartbeatMs: heartbeat.Milliseconds(),
 		Broker:      broker,
-		HTTPAddr:    httpAddr,
+		HTTPPort:    httpAddr,
 	})
 	if net := readNetworkInfo(); net != nil {
-		tracker.SetNetwork(&status.NetworkInfo{
-			Type:       net.Type,
-			IP:         net.IP,
-			Status:     net.Status,
-			Gateway:    net.Gateway,
-			WifiStatus: net.WifiStatus,
-			SSID:       net.SSID,
-		})
+		tracker.SetNetwork(net)
+	}
+
+	// Publish startup event with full status snapshot
+	snap := tracker.Snapshot()
+	startupEvent := mqtt.SystemEvent{
+		Timestamp:  snap.Now,
+		Event:      "STARTUP",
+		Retained:   true,
+		RawPayload: status.FormatStatusEvent(snap, "STARTUP", ""),
+	}
+	if err := publisher.PublishSystem(startupEvent); err != nil {
+		log.Printf("failed to publish startup event: %v", err)
+	} else {
+		log.Printf("published startup event")
 	}
 
 	// Start HTTP status server
@@ -141,6 +129,13 @@ func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, mqttStatus mqtt.C
 				Reason:    signalName,
 				Retained:  true,
 			}
+			if tracker != nil {
+				if mqttStatus != nil {
+					tracker.SetMQTTConnected(mqttStatus.IsConnected())
+				}
+				snap := tracker.Snapshot()
+				event.RawPayload = status.FormatStatusEvent(snap, "SHUTDOWN", signalName)
+			}
 			if err := publisher.PublishSystem(event); err != nil {
 				log.Printf("failed to publish shutdown event: %v", err)
 			} else {
@@ -177,22 +172,26 @@ func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, mqttStatus mqtt.C
 
 			// Check for heartbeat
 			if hbData := detector.CheckHeartbeat(t, heartbeat); hbData != nil {
+				log.Printf("heartbeat: uptime=%v ch_on=%d ch_off=%d hw_on=%d hw_off=%d",
+					hbData.Uptime, hbData.Counts.CHOn, hbData.Counts.CHOff, hbData.Counts.HWOn, hbData.Counts.HWOff)
+
 				hbEvent := mqtt.SystemEvent{
 					Timestamp: hbData.Timestamp,
 					Event:     "HEARTBEAT",
-					Heartbeat: &mqtt.HeartbeatInfo{
-						UptimeSeconds: int64(hbData.Uptime.Seconds()),
-						EventCounts: mqtt.HeartbeatCounts{
-							CHOn:  hbData.Counts.CHOn,
-							CHOff: hbData.Counts.CHOff,
-							HWOn:  hbData.Counts.HWOn,
-							HWOff: hbData.Counts.HWOff,
-						},
-					},
-					Network: readNetworkInfo(),
 				}
-				log.Printf("heartbeat: uptime=%v ch_on=%d ch_off=%d hw_on=%d hw_off=%d",
-					hbData.Uptime, hbData.Counts.CHOn, hbData.Counts.CHOff, hbData.Counts.HWOn, hbData.Counts.HWOff)
+				if tracker != nil {
+					if mqttStatus != nil {
+						tracker.SetMQTTConnected(mqttStatus.IsConnected())
+					}
+					// Refresh network info for heartbeat
+					if net := readNetworkInfo(); net != nil {
+						tracker.SetNetwork(net)
+					}
+					chState, hwState := detector.CurrentState()
+					tracker.Update(chState, hwState, detector.IsBaselined(), detector.EventCountsSnapshot())
+					snap := tracker.Snapshot()
+					hbEvent.RawPayload = status.FormatStatusEvent(snap, "HEARTBEAT", "")
+				}
 				if err := publisher.PublishSystem(hbEvent); err != nil {
 					log.Printf("heartbeat publish error: %v", err)
 				}
@@ -220,15 +219,15 @@ const (
 	envNetworkWifiSSID   = "NETWORK_WIFI_SSID"
 )
 
-func readNetworkInfo() *mqtt.NetworkInfo {
-	status := os.Getenv(envNetworkStatus)
-	if status == "" {
+func readNetworkInfo() *status.NetworkInfo {
+	s := os.Getenv(envNetworkStatus)
+	if s == "" {
 		return nil
 	}
-	return &mqtt.NetworkInfo{
+	return &status.NetworkInfo{
 		Type:       os.Getenv(envNetworkType),
 		IP:         os.Getenv(envNetworkIP),
-		Status:     status,
+		Status:     s,
 		Gateway:    os.Getenv(envNetworkGateway),
 		WifiStatus: os.Getenv(envNetworkWifiStatus),
 		SSID:       os.Getenv(envNetworkWifiSSID),

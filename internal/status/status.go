@@ -26,7 +26,7 @@ type Config struct {
 	DebounceMs  int64
 	HeartbeatMs int64
 	Broker      string
-	HTTPAddr    string
+	HTTPPort    string
 }
 
 // Snapshot is a point-in-time view of daemon state.

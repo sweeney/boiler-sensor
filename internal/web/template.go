@@ -83,6 +83,7 @@ th { width: 40%; }
 <tr><th>Poll</th><td>{{.Config.PollMs}}ms</td></tr>
 <tr><th>Debounce</th><td>{{.Config.DebounceMs}}ms</td></tr>
 <tr><th>Heartbeat</th><td>{{if eq .Config.HeartbeatMs 0}}disabled{{else}}{{.Config.HeartbeatMs}}ms{{end}}</td></tr>
+<tr><th>HTTP</th><td>{{.Config.HTTPPort}}</td></tr>
 </table>
 
 <p><a href="/index.json">JSON</a></p>

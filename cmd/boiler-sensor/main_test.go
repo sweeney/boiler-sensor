@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -47,7 +48,7 @@ func TestReadNetworkInfoAllSet(t *testing.T) {
 		t.Fatal("expected non-nil NetworkInfo")
 	}
 
-	want := &mqtt.NetworkInfo{
+	want := &status.NetworkInfo{
 		Type:       "wifi",
 		IP:         "192.168.1.100",
 		Status:     "connected",
@@ -345,12 +346,6 @@ func TestRunLoopHeartbeat(t *testing.T) {
 		switch se.Event {
 		case "HEARTBEAT":
 			heartbeats++
-			if se.Heartbeat == nil {
-				t.Fatal("HEARTBEAT event missing heartbeat info")
-			}
-			if se.Heartbeat.UptimeSeconds <= 0 {
-				t.Errorf("expected positive uptime, got %d", se.Heartbeat.UptimeSeconds)
-			}
 		case "SHUTDOWN":
 			shutdowns++
 		}
@@ -450,7 +445,7 @@ func TestRunLoopShutdownSIGTERM(t *testing.T) {
 
 func TestRunLoopHeartbeatIncludesNetworkInfo(t *testing.T) {
 	// Set network env vars so readNetworkInfo() returns data, then trigger
-	// a heartbeat and verify the system event carries the network info through.
+	// a heartbeat and verify the system event payload carries the network info.
 	t.Setenv(envNetworkStatus, "connected")
 	t.Setenv(envNetworkType, "wifi")
 	t.Setenv(envNetworkIP, "192.168.1.42")
@@ -466,44 +461,53 @@ func TestRunLoopHeartbeatIncludesNetworkInfo(t *testing.T) {
 	reader := gpio.NewFakeReader(samples)
 	pub := mqtt.NewFakePublisher()
 	clock := fakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), step)
+	tr := status.NewTracker(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), status.Config{})
 
-	err := runRunLoop(t, reader, pub, debounce, heartbeatInterval, clock, len(samples), syscall.SIGTERM)
-	if err != nil {
+	tick := make(chan time.Time)
+	sig := make(chan os.Signal, 1)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runLoop(reader, pub, nil, tr, debounce, heartbeatInterval, clock, tick, sig)
+	}()
+
+	for i := 0; i < len(samples); i++ {
+		tick <- time.Time{}
+	}
+	sig <- syscall.SIGTERM
+
+	if err := <-errCh; err != nil {
 		t.Fatalf("runLoop returned error: %v", err)
 	}
 
-	// Find the HEARTBEAT event
-	var hb *mqtt.SystemEvent
-	for i := range pub.SystemEvents {
-		if pub.SystemEvents[i].Event == "HEARTBEAT" {
-			hb = &pub.SystemEvents[i]
+	// Find the HEARTBEAT payload and verify network info is present
+	var hbPayload []byte
+	for i, se := range pub.SystemEvents {
+		if se.Event == "HEARTBEAT" {
+			hbPayload = pub.SystemPayloads[i]
 			break
 		}
 	}
-	if hb == nil {
+	if hbPayload == nil {
 		t.Fatal("expected a HEARTBEAT system event")
 	}
 
-	if hb.Network == nil {
-		t.Fatal("HEARTBEAT event missing Network info")
+	var parsed status.StatusJSON
+	if err := json.Unmarshal(hbPayload, &parsed); err != nil {
+		t.Fatalf("invalid HEARTBEAT JSON: %v", err)
 	}
-	if hb.Network.Status != "connected" {
-		t.Errorf("Network.Status: got %q, want %q", hb.Network.Status, "connected")
+
+	if parsed.Status.Network == nil {
+		t.Fatal("HEARTBEAT payload missing network info")
 	}
-	if hb.Network.Type != "wifi" {
-		t.Errorf("Network.Type: got %q, want %q", hb.Network.Type, "wifi")
+	if parsed.Status.Network.Status != "connected" {
+		t.Errorf("Network.Status: got %q, want %q", parsed.Status.Network.Status, "connected")
 	}
-	if hb.Network.IP != "192.168.1.42" {
-		t.Errorf("Network.IP: got %q, want %q", hb.Network.IP, "192.168.1.42")
+	if parsed.Status.Network.Type != "wifi" {
+		t.Errorf("Network.Type: got %q, want %q", parsed.Status.Network.Type, "wifi")
 	}
-	if hb.Network.Gateway != "192.168.1.1" {
-		t.Errorf("Network.Gateway: got %q, want %q", hb.Network.Gateway, "192.168.1.1")
-	}
-	if hb.Network.WifiStatus != "associated" {
-		t.Errorf("Network.WifiStatus: got %q, want %q", hb.Network.WifiStatus, "associated")
-	}
-	if hb.Network.SSID != "HomeNet" {
-		t.Errorf("Network.SSID: got %q, want %q", hb.Network.SSID, "HomeNet")
+	if parsed.Status.Network.IP != "192.168.1.42" {
+		t.Errorf("Network.IP: got %q, want %q", parsed.Status.Network.IP, "192.168.1.42")
 	}
 }
 

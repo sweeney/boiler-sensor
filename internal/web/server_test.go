@@ -20,7 +20,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *status.Tracker) {
 		DebounceMs:  250,
 		HeartbeatMs: 900000,
 		Broker:      "tcp://192.168.1.200:1883",
-		HTTPAddr:    ":80",
+		HTTPPort:    ":80",
 	}
 	tr := status.NewTracker(start, cfg)
 	srv := New(":0", tr)
@@ -47,7 +47,7 @@ func TestJSONEndpoint(t *testing.T) {
 		t.Errorf("Content-Type: got %q, want application/json", ct)
 	}
 
-	var sj StatusJSON
+	var sj status.StatusJSON
 	if err := json.NewDecoder(resp.Body).Decode(&sj); err != nil {
 		t.Fatalf("decode JSON: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestJSONUnknownStateBeforeBaseline(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	var sj StatusJSON
+	var sj status.StatusJSON
 	json.NewDecoder(resp.Body).Decode(&sj)
 
 	if sj.Status.CH != "UNKNOWN" {
@@ -116,7 +116,7 @@ func TestJSONNetworkInfo(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	var sj StatusJSON
+	var sj status.StatusJSON
 	json.NewDecoder(resp.Body).Decode(&sj)
 
 	if sj.Status.Network == nil {
@@ -179,7 +179,7 @@ func TestStateChangesReflectedInResponse(t *testing.T) {
 
 	// Initially not baselined
 	resp1, _ := http.Get(ts.URL + "/index.json")
-	var sj1 StatusJSON
+	var sj1 status.StatusJSON
 	json.NewDecoder(resp1.Body).Decode(&sj1)
 	resp1.Body.Close()
 	if sj1.Status.Ready {
@@ -192,7 +192,7 @@ func TestStateChangesReflectedInResponse(t *testing.T) {
 
 	// Should reflect new state
 	resp2, _ := http.Get(ts.URL + "/index.json")
-	var sj2 StatusJSON
+	var sj2 status.StatusJSON
 	json.NewDecoder(resp2.Body).Decode(&sj2)
 	resp2.Body.Close()
 
