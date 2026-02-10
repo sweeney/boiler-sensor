@@ -52,10 +52,7 @@ func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, p
 	}
 
 	// Initialize MQTT
-	publisher, err := mqtt.NewRealPublisher(broker)
-	if err != nil {
-		return fmt.Errorf("init mqtt: %w", err)
-	}
+	publisher := mqtt.NewRealPublisher(broker)
 	defer publisher.Close()
 
 	// Publish startup event

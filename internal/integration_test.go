@@ -828,6 +828,54 @@ func TestIntegrationWillPayloadFormat(t *testing.T) {
 	}
 }
 
+// TestIntegrationReconnectedEventFormat verifies the exact JSON structure for RECONNECTED events.
+func TestIntegrationReconnectedEventFormat(t *testing.T) {
+	publisher := mqtt.NewFakePublisher()
+
+	event := mqtt.SystemEvent{
+		Timestamp: time.Date(2026, 2, 10, 14, 30, 0, 0, time.UTC),
+		Event:     "RECONNECTED",
+		Retained:  true,
+	}
+
+	if err := publisher.PublishSystem(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(publisher.SystemPayloads) != 1 {
+		t.Fatalf("expected 1 system payload, got %d", len(publisher.SystemPayloads))
+	}
+
+	expected := `{"system":{"timestamp":"2026-02-10T14:30:00Z","event":"RECONNECTED"}}`
+	if string(publisher.SystemPayloads[0]) != expected {
+		t.Errorf("unexpected payload:\ngot:  %s\nwant: %s", string(publisher.SystemPayloads[0]), expected)
+	}
+
+	// Verify no extra fields in the JSON
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(publisher.SystemPayloads[0], &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	system := parsed["system"].(map[string]interface{})
+	if _, exists := system["reason"]; exists {
+		t.Error("RECONNECTED should not have reason field")
+	}
+	if _, exists := system["config"]; exists {
+		t.Error("RECONNECTED should not have config field")
+	}
+	if _, exists := system["heartbeat"]; exists {
+		t.Error("RECONNECTED should not have heartbeat field")
+	}
+	if _, exists := system["network"]; exists {
+		t.Error("RECONNECTED should not have network field")
+	}
+
+	// Verify retained flag is preserved
+	if !publisher.SystemEvents[0].Retained {
+		t.Error("RECONNECTED event should have Retained=true")
+	}
+}
+
 // TestIntegrationHeartbeatAfterTransitions verifies heartbeat contains correct counts after transitions.
 func TestIntegrationHeartbeatAfterTransitions(t *testing.T) {
 	samples := []gpio.Sample{

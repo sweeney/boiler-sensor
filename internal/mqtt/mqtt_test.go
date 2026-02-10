@@ -993,6 +993,42 @@ func TestWillPayloadFormat(t *testing.T) {
 	}
 }
 
+func TestFormatSystemPayloadReconnected(t *testing.T) {
+	event := SystemEvent{
+		Timestamp: time.Date(2026, 2, 10, 14, 30, 0, 0, time.UTC),
+		Event:     "RECONNECTED",
+	}
+
+	payload, err := FormatSystemPayload(event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `{"system":{"timestamp":"2026-02-10T14:30:00Z","event":"RECONNECTED"}}`
+	if string(payload) != expected {
+		t.Errorf("unexpected payload:\ngot:  %s\nwant: %s", string(payload), expected)
+	}
+
+	// Verify no reason, config, heartbeat, or network
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	system := parsed["system"].(map[string]interface{})
+	if _, exists := system["reason"]; exists {
+		t.Error("RECONNECTED should not have reason field")
+	}
+	if _, exists := system["config"]; exists {
+		t.Error("RECONNECTED should not have config field")
+	}
+	if _, exists := system["heartbeat"]; exists {
+		t.Error("RECONNECTED should not have heartbeat field")
+	}
+	if _, exists := system["network"]; exists {
+		t.Error("RECONNECTED should not have network field")
+	}
+}
+
 func TestFakePublisherRecordsRetainedFlag(t *testing.T) {
 	f := NewFakePublisher()
 
