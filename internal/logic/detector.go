@@ -157,6 +157,16 @@ func eventTypeForTransition(from, to State, isCH bool) *EventType {
 	return &event
 }
 
+// StartTime returns the time the detector was created.
+func (d *Detector) StartTime() time.Time {
+	return d.startTime
+}
+
+// EventCountsSnapshot returns a copy of the current event counts.
+func (d *Detector) EventCountsSnapshot() EventCounts {
+	return d.eventCounts
+}
+
 // IsBaselined returns whether the detector has established a baseline.
 func (d *Detector) IsBaselined() bool {
 	return d.baselined

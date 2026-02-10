@@ -86,6 +86,23 @@ Events: `CH_ON`, `CH_OFF`, `HW_ON`, `HW_OFF`
 | `--pin-hw`  | 16                          | BCM pin for Hot Water |
 | `--print-state` | false                   | Print state and exit  |
 | `--heartbeat` | 15 minutes                | Heartbeat interval (0 to disable) |
+| `--http`      | :80                       | HTTP status address (empty to disable) |
+
+## Web Status
+
+![Web status page](gui.jpg)
+
+The daemon serves a lightweight status page over HTTP (default port 80):
+
+- `GET /` or `GET /index.html` — HTML status page showing channel states, MQTT connectivity, event counts, uptime, and config
+- `GET /index.json` — JSON status response for programmatic access
+
+```bash
+curl http://pi0wh/              # HTML page
+curl http://pi0wh/index.json    # JSON response
+```
+
+Disable with `--http ""`.
 
 ## Development
 

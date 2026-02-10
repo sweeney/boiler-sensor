@@ -27,6 +27,11 @@ type Publisher interface {
 	Close() error
 }
 
+// ConnectionStatus reports whether the MQTT connection is active.
+type ConnectionStatus interface {
+	IsConnected() bool
+}
+
 // SystemEvent represents a system lifecycle event (e.g., startup, shutdown, heartbeat).
 type SystemEvent struct {
 	Timestamp time.Time

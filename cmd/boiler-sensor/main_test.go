@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/sweeney/boiler-sensor/internal/gpio"
+	"github.com/sweeney/boiler-sensor/internal/logic"
 	"github.com/sweeney/boiler-sensor/internal/mqtt"
+	"github.com/sweeney/boiler-sensor/internal/status"
 )
 
 // TestEnvVarNames verifies the env var constants match what pi-helper writes
@@ -160,7 +162,7 @@ func runRunLoop(t *testing.T, reader gpio.Reader, pub *mqtt.FakePublisher, debou
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runLoop(reader, pub, debounce, heartbeat, clock, tick, sig)
+		errCh <- runLoop(reader, pub, nil, nil, debounce, heartbeat, clock, tick, sig)
 	}()
 
 	for i := 0; i < nTicks; i++ {
@@ -533,5 +535,52 @@ func TestRunLoopGPIOErrorRecovery(t *testing.T) {
 	}
 	if pub.Events[0].Type != "CH_ON" {
 		t.Errorf("expected CH_ON, got %s", pub.Events[0].Type)
+	}
+}
+
+func TestRunLoopUpdatesTracker(t *testing.T) {
+	// 4× baseline (both off) + 4× CH on → tracker should reflect state
+	samples := append(
+		repeat(gpio.Sample{CH: false, HW: false}, 4),
+		repeat(gpio.Sample{CH: true, HW: false}, 4)...,
+	)
+	reader := gpio.NewFakeReader(samples)
+	pub := mqtt.NewFakePublisher()
+	pub.Connected = true
+	clock := fakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), 100*time.Millisecond)
+	tr := status.NewTracker(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), status.Config{})
+
+	tick := make(chan time.Time)
+	sig := make(chan os.Signal, 1)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runLoop(reader, pub, pub, tr, 250*time.Millisecond, 0, clock, tick, sig)
+	}()
+
+	for i := 0; i < len(samples); i++ {
+		tick <- time.Time{}
+	}
+	sig <- syscall.SIGTERM
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("runLoop returned error: %v", err)
+	}
+
+	snap := tr.Snapshot()
+	if snap.CH != logic.StateOn {
+		t.Errorf("tracker CH: got %q, want ON", snap.CH)
+	}
+	if snap.HW != logic.StateOff {
+		t.Errorf("tracker HW: got %q, want OFF", snap.HW)
+	}
+	if !snap.Baselined {
+		t.Error("tracker should be baselined")
+	}
+	if snap.Counts.CHOn != 1 {
+		t.Errorf("tracker Counts.CHOn: got %d, want 1", snap.Counts.CHOn)
+	}
+	if !snap.MQTTConnected {
+		t.Error("tracker should show MQTT connected")
 	}
 }

@@ -765,6 +765,57 @@ func FuzzDetectorProcess(f *testing.F) {
 	})
 }
 
+func TestStartTimeMatchesConstructorArg(t *testing.T) {
+	startTime := time.Date(2026, 2, 10, 14, 30, 0, 0, time.UTC)
+	d := NewDetector(250*time.Millisecond, startTime)
+	if !d.StartTime().Equal(startTime) {
+		t.Errorf("StartTime: got %v, want %v", d.StartTime(), startTime)
+	}
+}
+
+func TestEventCountsSnapshotAfterTransitions(t *testing.T) {
+	d := setupBaselinedDetector(t, false, false)
+	now := time.Date(2026, 1, 1, 12, 1, 0, 0, time.UTC)
+
+	// CH turns ON
+	d.Process(Input{CH: true, HW: false, Time: now})
+	d.Process(Input{CH: true, HW: false, Time: now.Add(250 * time.Millisecond)})
+
+	snap := d.EventCountsSnapshot()
+	if snap.CHOn != 1 {
+		t.Errorf("expected CHOn=1, got %d", snap.CHOn)
+	}
+	if snap.CHOff != 0 || snap.HWOn != 0 || snap.HWOff != 0 {
+		t.Error("expected other counts to be 0")
+	}
+}
+
+func TestEventCountsSnapshotIsCopy(t *testing.T) {
+	d := setupBaselinedDetector(t, false, false)
+	now := time.Date(2026, 1, 1, 12, 1, 0, 0, time.UTC)
+
+	// CH turns ON
+	d.Process(Input{CH: true, HW: false, Time: now})
+	d.Process(Input{CH: true, HW: false, Time: now.Add(250 * time.Millisecond)})
+
+	snap1 := d.EventCountsSnapshot()
+
+	// CH turns OFF
+	t2 := now.Add(500 * time.Millisecond)
+	d.Process(Input{CH: false, HW: false, Time: t2})
+	d.Process(Input{CH: false, HW: false, Time: t2.Add(250 * time.Millisecond)})
+
+	// snap1 should not have changed
+	if snap1.CHOff != 0 {
+		t.Error("snapshot should be a copy; CHOff was modified")
+	}
+
+	snap2 := d.EventCountsSnapshot()
+	if snap2.CHOff != 1 {
+		t.Errorf("expected CHOff=1 in new snapshot, got %d", snap2.CHOff)
+	}
+}
+
 func TestMultipleHeartbeatsAccumulateCounts(t *testing.T) {
 	startTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	d := NewDetector(250*time.Millisecond, startTime)

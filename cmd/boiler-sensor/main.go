@@ -2,9 +2,11 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +15,8 @@ import (
 	"github.com/sweeney/boiler-sensor/internal/gpio"
 	"github.com/sweeney/boiler-sensor/internal/logic"
 	"github.com/sweeney/boiler-sensor/internal/mqtt"
+	"github.com/sweeney/boiler-sensor/internal/status"
+	"github.com/sweeney/boiler-sensor/internal/web"
 )
 
 func main() {
@@ -23,15 +27,16 @@ func main() {
 	pinCH := flag.Int("pin-ch", gpio.DefaultPinCH, "BCM pin number for Central Heating")
 	pinHW := flag.Int("pin-hw", gpio.DefaultPinHW, "BCM pin number for Hot Water")
 	printState := flag.Bool("print-state", false, "Print current state and exit")
+	httpAddr := flag.String("http", ":80", "HTTP status address (empty to disable)")
 
 	flag.Parse()
 
-	if err := run(*poll, *debounce, *broker, *heartbeat, *pinCH, *pinHW, *printState); err != nil {
+	if err := run(*poll, *debounce, *broker, *heartbeat, *pinCH, *pinHW, *printState, *httpAddr); err != nil {
 		log.Fatalf("fatal: %v", err)
 	}
 }
 
-func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, pinCH, pinHW int, printState bool) error {
+func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, pinCH, pinHW int, printState bool, httpAddr string) error {
 	// Initialize GPIO
 	gpioReader, err := gpio.NewRealReader(pinCH, pinHW)
 	if err != nil {
@@ -74,6 +79,37 @@ func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, p
 		log.Printf("published startup event")
 	}
 
+	// Initialize status tracker
+	tracker := status.NewTracker(time.Now(), status.Config{
+		PollMs:      poll.Milliseconds(),
+		DebounceMs:  debounce.Milliseconds(),
+		HeartbeatMs: heartbeat.Milliseconds(),
+		Broker:      broker,
+		HTTPAddr:    httpAddr,
+	})
+	if net := readNetworkInfo(); net != nil {
+		tracker.SetNetwork(&status.NetworkInfo{
+			Type:       net.Type,
+			IP:         net.IP,
+			Status:     net.Status,
+			Gateway:    net.Gateway,
+			WifiStatus: net.WifiStatus,
+			SSID:       net.SSID,
+		})
+	}
+
+	// Start HTTP status server
+	if httpAddr != "" {
+		srv := web.New(httpAddr, tracker)
+		go func() {
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("http server error: %v", err)
+			}
+		}()
+		defer srv.Shutdown(context.Background())
+		log.Printf("http status server listening on %s", httpAddr)
+	}
+
 	log.Printf("started: poll=%v debounce=%v broker=%s heartbeat=%v", poll, debounce, broker, heartbeat)
 
 	ticker := time.NewTicker(poll)
@@ -82,10 +118,10 @@ func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, p
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	return runLoop(gpioReader, publisher, debounce, heartbeat, time.Now, ticker.C, sigCh)
+	return runLoop(gpioReader, publisher, publisher, tracker, debounce, heartbeat, time.Now, ticker.C, sigCh)
 }
 
-func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, debounce, heartbeat time.Duration, now func() time.Time, tick <-chan time.Time, sig <-chan os.Signal) error {
+func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, mqttStatus mqtt.ConnectionStatus, tracker *status.Tracker, debounce, heartbeat time.Duration, now func() time.Time, tick <-chan time.Time, sig <-chan os.Signal) error {
 	startTime := now()
 	detector := logic.NewDetector(debounce, startTime)
 
@@ -159,6 +195,15 @@ func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, debounce, heartbe
 					hbData.Uptime, hbData.Counts.CHOn, hbData.Counts.CHOff, hbData.Counts.HWOn, hbData.Counts.HWOff)
 				if err := publisher.PublishSystem(hbEvent); err != nil {
 					log.Printf("heartbeat publish error: %v", err)
+				}
+			}
+
+			// Update status tracker for HTTP/LED consumers
+			if tracker != nil {
+				chState, hwState := detector.CurrentState()
+				tracker.Update(chState, hwState, detector.IsBaselined(), detector.EventCountsSnapshot())
+				if mqttStatus != nil {
+					tracker.SetMQTTConnected(mqttStatus.IsConnected())
 				}
 			}
 		}

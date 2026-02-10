@@ -120,6 +120,13 @@ func (p *RealPublisher) onConnect(_ paho.Client) {
 	}
 }
 
+// IsConnected reports whether the MQTT client is currently connected.
+func (p *RealPublisher) IsConnected() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.connected
+}
+
 // Publish sends a heating event to the MQTT broker.
 func (p *RealPublisher) Publish(event logic.Event) error {
 	payload, err := FormatPayload(event)

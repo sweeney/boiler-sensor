@@ -26,6 +26,9 @@ type FakePublisher struct {
 
 	// Closed tracks if Close was called.
 	Closed bool
+
+	// Connected controls the return value of IsConnected.
+	Connected bool
 }
 
 // NewFakePublisher creates a FakePublisher for testing.
@@ -73,6 +76,11 @@ func (f *FakePublisher) Close() error {
 	return nil
 }
 
+// IsConnected reports whether the fake publisher is "connected".
+func (f *FakePublisher) IsConnected() bool {
+	return f.Connected
+}
+
 // Reset clears recorded events.
 func (f *FakePublisher) Reset() {
 	f.Events = nil
@@ -82,4 +90,5 @@ func (f *FakePublisher) Reset() {
 	f.Closed = false
 	f.PublishError = nil
 	f.PublishSystemError = nil
+	f.Connected = false
 }

@@ -24,6 +24,8 @@ cmd/boiler-sensor/    # Main entry point, flags, wiring. NO business logic.
 internal/logic/       # Pure business logic. NO external dependencies.
 internal/gpio/        # GPIO abstraction (real + fake implementations)
 internal/mqtt/        # MQTT abstraction (real + fake implementations)
+internal/status/      # Thread-safe status tracker (shared by web + future LED drivers)
+internal/web/         # HTTP status server (JSON + HTML endpoints)
 ```
 
 ### `internal/logic` Rules (Non-Negotiable)
@@ -46,6 +48,7 @@ Raw GPIO active = logical OFF. This inversion must be handled in exactly one pla
 - Poll interval: `--poll` (default 100ms)
 - Debounce duration: `--debounce` (default 250ms)
 - Broker: `--broker` (default `tcp://192.168.1.200:1883`)
+- HTTP status: `--http` (default `:80`, empty string disables)
 - **No MQTT events at startup** - only after baseline established
 - Events only on transitions: CH_ON, CH_OFF, HW_ON, HW_OFF
 
