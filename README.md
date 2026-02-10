@@ -97,7 +97,7 @@ The MQTT Last Will and Testament (LWT) is set to publish a `SHUTDOWN` event with
 
 ## Web Status
 
-![Web status page](gui.jpg)
+![Web status page](docs/screenshot.jpg)
 
 The daemon serves a lightweight status page over HTTP (default port 80):
 
