@@ -76,19 +76,18 @@ func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, p
 
 	log.Printf("started: poll=%v debounce=%v broker=%s heartbeat=%v", poll, debounce, broker, heartbeat)
 
-	return runLoop(gpioReader, publisher, poll, debounce, heartbeat)
-}
-
-func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, poll, debounce, heartbeat time.Duration) error {
-	startTime := time.Now()
-	detector := logic.NewDetector(debounce, startTime)
-
-	// Handle shutdown
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	return runLoop(gpioReader, publisher, debounce, heartbeat, time.Now, ticker.C, sigCh)
+}
+
+func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, debounce, heartbeat time.Duration, now func() time.Time, tick <-chan time.Time, sig <-chan os.Signal) error {
+	startTime := now()
+	detector := logic.NewDetector(debounce, startTime)
 
 	for {
 		select {
@@ -101,7 +100,7 @@ func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, poll, debounce, h
 				signalName = "SIGTERM"
 			}
 			event := mqtt.SystemEvent{
-				Timestamp: time.Now(),
+				Timestamp: now(),
 				Event:     "SHUTDOWN",
 				Reason:    signalName,
 				Retained:  true,
@@ -113,8 +112,8 @@ func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, poll, debounce, h
 			}
 			return nil
 
-		case <-ticker.C:
-			now := time.Now()
+		case <-tick:
+			t := now()
 			ch, hw, err := gpioReader.Read()
 			if err != nil {
 				log.Printf("gpio read error: %v", err)
@@ -124,7 +123,7 @@ func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, poll, debounce, h
 			events := detector.Process(logic.Input{
 				CH:   ch,
 				HW:   hw,
-				Time: now,
+				Time: t,
 			})
 
 			for _, event := range events {
@@ -141,7 +140,7 @@ func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, poll, debounce, h
 			}
 
 			// Check for heartbeat
-			if hbData := detector.CheckHeartbeat(now, heartbeat); hbData != nil {
+			if hbData := detector.CheckHeartbeat(t, heartbeat); hbData != nil {
 				hbEvent := mqtt.SystemEvent{
 					Timestamp: hbData.Timestamp,
 					Event:     "HEARTBEAT",
