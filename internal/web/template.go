@@ -12,9 +12,13 @@ import (
 var indexTmpl = template.Must(template.New("index").Funcs(template.FuncMap{
 	"uptime": func(d time.Duration) string {
 		d = d.Truncate(time.Second)
-		h := int(d.Hours())
+		days := int(d.Hours()) / 24
+		h := int(d.Hours()) % 24
 		m := int(d.Minutes()) % 60
 		s := int(d.Seconds()) % 60
+		if days > 0 {
+			return fmt.Sprintf("%dd %dh %dm %ds", days, h, m, s)
+		}
 		if h > 0 {
 			return fmt.Sprintf("%dh %dm %ds", h, m, s)
 		}
