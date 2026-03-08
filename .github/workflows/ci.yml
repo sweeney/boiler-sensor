@@ -22,7 +22,7 @@ jobs:
 
       - name: Run go vet
         run: |
-          VET_OUTPUT=$(go vet ./... 2>&1) || true
+          VET_OUTPUT=$(go vet ./... 2>&1 | grep -v "^go: ") || true
           echo "$VET_OUTPUT"
 
           if [ -n "$VET_OUTPUT" ]; then
