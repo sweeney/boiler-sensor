@@ -20,6 +20,27 @@ type RealPublisher struct {
 	buf           *ringBuffer
 }
 
+// buildClientOptions constructs the Paho ClientOptions for the given broker.
+// Extracted so tests can inspect the configuration without connecting.
+func buildClientOptions(broker string, p *RealPublisher, willPayload []byte) *paho.ClientOptions {
+	opts := paho.NewClientOptions().
+		AddBroker(broker).
+		SetClientID("boiler-sensor").
+		SetAutoReconnect(true).
+		SetConnectRetry(true).
+		SetConnectRetryInterval(5 * time.Second).
+		SetMaxReconnectInterval(30 * time.Second).
+		SetConnectionLostHandler(p.onConnectionLost).
+		SetReconnectingHandler(p.onReconnecting).
+		SetOnConnectHandler(p.onConnect)
+
+	if willPayload != nil {
+		opts.SetWill(TopicSystem, string(willPayload), 1, true)
+	}
+
+	return opts
+}
+
 // NewRealPublisher creates a publisher that connects to the given broker
 // asynchronously. It returns immediately — Paho retries in the background.
 func NewRealPublisher(broker string) *RealPublisher {
@@ -39,21 +60,7 @@ func NewRealPublisher(broker string) *RealPublisher {
 		buf:   newRingBuffer(100),
 	}
 
-	opts := paho.NewClientOptions().
-		AddBroker(broker).
-		SetClientID("boiler-sensor").
-		SetAutoReconnect(true).
-		SetConnectRetry(true).
-		SetConnectRetryInterval(5 * time.Second).
-		SetConnectionLostHandler(p.onConnectionLost).
-		SetReconnectingHandler(p.onReconnecting).
-		SetOnConnectHandler(p.onConnect)
-
-	if willPayload != nil {
-		opts.SetWill(TopicSystem, string(willPayload), 1, true)
-	}
-
-	p.client = paho.NewClient(opts)
+	p.client = paho.NewClient(buildClientOptions(broker, p, willPayload))
 
 	// Non-blocking connect — Paho retries via ConnectRetry.
 	p.client.Connect()

@@ -183,6 +183,42 @@ func TestFakePublisherReset(t *testing.T) {
 	}
 }
 
+func TestClientOptionsMaxReconnectInterval(t *testing.T) {
+	p := &RealPublisher{topic: Topic, buf: newRingBuffer(100)}
+	opts := buildClientOptions("tcp://localhost:1883", p, nil)
+	if opts.MaxReconnectInterval != 30*time.Second {
+		t.Errorf("MaxReconnectInterval: got %v, want 30s", opts.MaxReconnectInterval)
+	}
+}
+
+func TestClientOptionsConnectRetryInterval(t *testing.T) {
+	p := &RealPublisher{topic: Topic, buf: newRingBuffer(100)}
+	opts := buildClientOptions("tcp://localhost:1883", p, nil)
+	if opts.ConnectRetryInterval != 5*time.Second {
+		t.Errorf("ConnectRetryInterval: got %v, want 5s", opts.ConnectRetryInterval)
+	}
+}
+
+func TestClientOptionsWillSetWhenPayloadProvided(t *testing.T) {
+	p := &RealPublisher{topic: Topic, buf: newRingBuffer(100)}
+	will := []byte(`{"system":{"event":"SHUTDOWN"}}`)
+	opts := buildClientOptions("tcp://localhost:1883", p, will)
+	if opts.WillEnabled != true {
+		t.Error("expected will to be enabled when payload provided")
+	}
+	if opts.WillTopic != TopicSystem {
+		t.Errorf("will topic: got %s, want %s", opts.WillTopic, TopicSystem)
+	}
+}
+
+func TestClientOptionsNoWillWhenPayloadNil(t *testing.T) {
+	p := &RealPublisher{topic: Topic, buf: newRingBuffer(100)}
+	opts := buildClientOptions("tcp://localhost:1883", p, nil)
+	if opts.WillEnabled {
+		t.Error("expected will to be disabled when payload is nil")
+	}
+}
+
 func TestTopic(t *testing.T) {
 	expected := "energy/boiler/sensor/events"
 	if Topic != expected {
