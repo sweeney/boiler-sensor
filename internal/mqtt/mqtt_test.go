@@ -743,6 +743,7 @@ func TestWillPayloadFormat(t *testing.T) {
 		Timestamp: time.Date(2026, 2, 10, 8, 30, 0, 0, time.UTC),
 		Event:     "SHUTDOWN",
 		Reason:    "MQTT_DISCONNECT",
+		Source:    "last_will",
 	}
 
 	payload, err := FormatSystemPayload(event)
@@ -761,13 +762,38 @@ func TestWillPayloadFormat(t *testing.T) {
 	if parsed.System.Reason != "MQTT_DISCONNECT" {
 		t.Errorf("expected MQTT_DISCONNECT reason, got %s", parsed.System.Reason)
 	}
+	if parsed.System.Source != "last_will" {
+		t.Errorf("expected last_will source, got %s", parsed.System.Source)
+	}
 	if parsed.System.Timestamp != "2026-02-10T08:30:00Z" {
 		t.Errorf("unexpected timestamp: %s", parsed.System.Timestamp)
 	}
 
-	expected := `{"system":{"timestamp":"2026-02-10T08:30:00Z","event":"SHUTDOWN","reason":"MQTT_DISCONNECT"}}`
+	expected := `{"system":{"timestamp":"2026-02-10T08:30:00Z","event":"SHUTDOWN","reason":"MQTT_DISCONNECT","source":"last_will"}}`
 	if string(payload) != expected {
 		t.Errorf("unexpected payload:\ngot:  %s\nwant: %s", string(payload), expected)
+	}
+}
+
+func TestFormatSystemPayloadSourceOmittedWhenEmpty(t *testing.T) {
+	event := SystemEvent{
+		Timestamp: time.Date(2026, 2, 10, 8, 30, 0, 0, time.UTC),
+		Event:     "SHUTDOWN",
+		Reason:    "SIGTERM",
+	}
+
+	payload, err := FormatSystemPayload(event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	system := parsed["system"].(map[string]interface{})
+	if _, exists := system["source"]; exists {
+		t.Error("source field should be omitted for application-published events")
 	}
 }
 

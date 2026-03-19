@@ -116,6 +116,7 @@ func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, p
 func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, mqttStatus mqtt.ConnectionStatus, tracker *status.Tracker, debounce, heartbeat time.Duration, now func() time.Time, tick <-chan time.Time, sig <-chan os.Signal) error {
 	startTime := now()
 	detector := logic.NewDetector(debounce, startTime)
+	var prevNet *status.NetworkInfo
 
 	for {
 		select {
@@ -176,8 +177,35 @@ func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, mqttStatus mqtt.C
 
 			// Check for heartbeat
 			if hbData := detector.CheckHeartbeat(t, heartbeat); hbData != nil {
-				log.Printf("heartbeat: uptime=%v ch_on=%d ch_off=%d hw_on=%d hw_off=%d",
-					hbData.Uptime, hbData.Counts.CHOn, hbData.Counts.CHOff, hbData.Counts.HWOn, hbData.Counts.HWOff)
+				mqttUp := "unknown"
+				if mqttStatus != nil {
+					if mqttStatus.IsConnected() {
+						mqttUp = "connected"
+					} else {
+						mqttUp = "disconnected"
+					}
+				}
+				netInfo := readNetworkInfo()
+				netDesc := "unavailable"
+				if netInfo != nil {
+					if netInfo.SSID != "" {
+						netDesc = fmt.Sprintf("%s/%s (wifi=%s ssid=%s)", netInfo.Status, netInfo.IP, netInfo.WifiStatus, netInfo.SSID)
+					} else {
+						netDesc = fmt.Sprintf("%s/%s", netInfo.Status, netInfo.IP)
+					}
+				}
+				log.Printf("heartbeat: uptime=%v mqtt=%s net=%s ch_on=%d ch_off=%d hw_on=%d hw_off=%d",
+					hbData.Uptime, mqttUp, netDesc,
+					hbData.Counts.CHOn, hbData.Counts.CHOff, hbData.Counts.HWOn, hbData.Counts.HWOff)
+
+				// Detect network state changes since last heartbeat
+				if prevNet != nil && netInfo != nil && prevNet.Status != netInfo.Status {
+					log.Printf("network: status changed since last heartbeat: %s → %s", prevNet.Status, netInfo.Status)
+				}
+				if prevNet != nil && netInfo != nil && prevNet.WifiStatus != netInfo.WifiStatus {
+					log.Printf("network: wifi status changed since last heartbeat: %s → %s", prevNet.WifiStatus, netInfo.WifiStatus)
+				}
+				prevNet = netInfo
 
 				hbEvent := mqtt.SystemEvent{
 					Timestamp: hbData.Timestamp,

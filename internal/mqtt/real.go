@@ -12,12 +12,15 @@ import (
 
 // RealPublisher publishes to an actual MQTT broker.
 type RealPublisher struct {
-	client        paho.Client
-	topic         string
-	mu            sync.Mutex
-	connected     bool
-	everConnected bool
-	buf           *ringBuffer
+	client           paho.Client
+	topic            string
+	mu               sync.Mutex
+	connected        bool
+	everConnected    bool
+	buf              *ringBuffer
+	connectedSince   time.Time // when the current connection was established
+	disconnectedAt   time.Time // when the connection was last lost
+	reconnectCount   int       // consecutive reconnect attempts since last connection
 }
 
 // buildClientOptions constructs the Paho ClientOptions for the given broker.
@@ -48,6 +51,7 @@ func NewRealPublisher(broker string) *RealPublisher {
 		Timestamp: time.Now(),
 		Event:     "SHUTDOWN",
 		Reason:    "MQTT_DISCONNECT",
+		Source:    "last_will",
 	})
 	if err != nil {
 		// FormatSystemPayload only fails on json.Marshal of a known struct —
@@ -69,21 +73,35 @@ func NewRealPublisher(broker string) *RealPublisher {
 }
 
 func (p *RealPublisher) onConnectionLost(_ paho.Client, err error) {
-	log.Printf("mqtt: connection lost: %v", err)
 	p.mu.Lock()
+	uptime := time.Since(p.connectedSince)
 	p.connected = false
+	p.disconnectedAt = time.Now()
+	p.reconnectCount = 0
 	p.mu.Unlock()
+	log.Printf("mqtt: connection lost after %v: %v", uptime.Truncate(time.Second), err)
 }
 
 func (p *RealPublisher) onReconnecting(_ paho.Client, _ *paho.ClientOptions) {
-	log.Printf("mqtt: reconnecting to broker")
+	p.mu.Lock()
+	p.reconnectCount++
+	n := p.reconnectCount
+	disconnectedFor := time.Since(p.disconnectedAt)
+	p.mu.Unlock()
+	log.Printf("mqtt: reconnecting to broker (attempt %d, disconnected %v)", n, disconnectedFor.Truncate(time.Second))
 }
 
 func (p *RealPublisher) onConnect(_ paho.Client) {
 	p.mu.Lock()
 	wasEverConnected := p.everConnected
+	disconnectedFor := time.Duration(0)
+	if wasEverConnected && !p.disconnectedAt.IsZero() {
+		disconnectedFor = time.Since(p.disconnectedAt)
+	}
 	p.connected = true
 	p.everConnected = true
+	p.connectedSince = time.Now()
+	p.reconnectCount = 0
 	msgs := p.buf.drainAll()
 	p.mu.Unlock()
 
@@ -103,6 +121,8 @@ func (p *RealPublisher) onConnect(_ paho.Client) {
 
 	if len(msgs) > 0 {
 		log.Printf("mqtt: connected to broker, replayed %d/%d buffered events", n, len(msgs))
+	} else if wasEverConnected {
+		log.Printf("mqtt: reconnected to broker (was disconnected %v)", disconnectedFor.Truncate(time.Second))
 	} else {
 		log.Printf("mqtt: connected to broker")
 	}

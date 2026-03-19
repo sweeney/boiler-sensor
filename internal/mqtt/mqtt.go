@@ -37,6 +37,7 @@ type SystemEvent struct {
 	Timestamp  time.Time
 	Event      string // e.g., "STARTUP", "SHUTDOWN", "HEARTBEAT"
 	Reason     string // e.g., "SIGTERM", "SIGINT" (shutdown only)
+	Source     string // e.g., "last_will" (broker-published LWT); omitted for application-published events
 	RawPayload []byte // Pre-formatted JSON payload; if set, FormatSystemPayload returns it directly
 	Retained   bool   // Whether the message should be retained by the broker
 }
@@ -83,6 +84,7 @@ type SystemPayloadInner struct {
 	Timestamp string `json:"timestamp"`
 	Event     string `json:"event"`
 	Reason    string `json:"reason,omitempty"`
+	Source    string `json:"source,omitempty"`
 }
 
 // FormatSystemPayload creates the JSON payload for a system event.
@@ -97,6 +99,7 @@ func FormatSystemPayload(event SystemEvent) ([]byte, error) {
 			Timestamp: event.Timestamp.UTC().Format(time.RFC3339),
 			Event:     event.Event,
 			Reason:    event.Reason,
+			Source:    event.Source,
 		},
 	}
 	return json.Marshal(payload)

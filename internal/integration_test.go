@@ -665,12 +665,13 @@ func TestIntegrationHeartbeatEventIsNotRetained(t *testing.T) {
 
 // TestIntegrationWillPayloadFormat verifies the will payload JSON matches expected structure.
 func TestIntegrationWillPayloadFormat(t *testing.T) {
-	// The will payload is a SHUTDOWN event with reason MQTT_DISCONNECT
+	// The will payload is a SHUTDOWN event with reason MQTT_DISCONNECT and source last_will
 	// LWT uses the simple format (no RawPayload, no tracker access)
 	event := mqtt.SystemEvent{
 		Timestamp: time.Date(2026, 2, 10, 8, 30, 0, 0, time.UTC),
 		Event:     "SHUTDOWN",
 		Reason:    "MQTT_DISCONNECT",
+		Source:    "last_will",
 	}
 
 	payload, err := mqtt.FormatSystemPayload(event)
@@ -688,6 +689,9 @@ func TestIntegrationWillPayloadFormat(t *testing.T) {
 	}
 	if parsed.System.Reason != "MQTT_DISCONNECT" {
 		t.Errorf("expected MQTT_DISCONNECT reason, got %s", parsed.System.Reason)
+	}
+	if parsed.System.Source != "last_will" {
+		t.Errorf("expected last_will source, got %s", parsed.System.Source)
 	}
 }
 
