@@ -112,6 +112,7 @@ func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, mqttStatus mqtt.C
 	startTime := now()
 	detector := logic.NewDetector(debounce, startTime)
 	var prevNet *status.NetworkInfo
+	var readyHeartbeatSent bool
 
 	for {
 		select {
@@ -170,7 +171,35 @@ func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, mqttStatus mqtt.C
 				continue
 			}
 
-			// Check for heartbeat
+			// Fire a heartbeat immediately the first time we're baselined so
+			// new MQTT subscribers get real state without waiting for the next
+			// scheduled interval.
+			if !readyHeartbeatSent {
+				readyHeartbeatSent = true
+				log.Printf("baseline established, publishing ready heartbeat")
+				hbEvent := mqtt.SystemEvent{
+					Timestamp: t,
+					Event:     "HEARTBEAT",
+					Retained:  true,
+				}
+				if tracker != nil {
+					if mqttStatus != nil {
+						tracker.SetMQTTConnected(mqttStatus.IsConnected())
+					}
+					if net := readNetworkInfo(); net != nil {
+						tracker.SetNetwork(net)
+					}
+					chState, hwState := detector.CurrentState()
+					tracker.Update(chState, hwState, detector.IsBaselined(), detector.EventCountsSnapshot())
+					snap := tracker.Snapshot()
+					hbEvent.RawPayload = status.FormatStatusEvent(snap, "HEARTBEAT", "")
+				}
+				if err := publisher.PublishSystem(hbEvent); err != nil {
+					log.Printf("ready heartbeat publish error: %v", err)
+				}
+			}
+
+			// Check for scheduled heartbeat
 			if hbData := detector.CheckHeartbeat(t, heartbeat); hbData != nil {
 				mqttUp := "unknown"
 				if mqttStatus != nil {

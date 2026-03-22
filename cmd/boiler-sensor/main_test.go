@@ -190,12 +190,21 @@ func TestRunLoopNoEventsAtBaseline(t *testing.T) {
 		t.Errorf("expected 0 heating events, got %d", len(pub.Events))
 	}
 
-	// Should have exactly one system event: SHUTDOWN
-	if len(pub.SystemEvents) != 1 {
-		t.Fatalf("expected 1 system event, got %d", len(pub.SystemEvents))
+	// Should have a ready HEARTBEAT (on baseline) and a SHUTDOWN
+	var gotHeartbeat, gotShutdown bool
+	for _, se := range pub.SystemEvents {
+		switch se.Event {
+		case "HEARTBEAT":
+			gotHeartbeat = true
+		case "SHUTDOWN":
+			gotShutdown = true
+		}
 	}
-	if pub.SystemEvents[0].Event != "SHUTDOWN" {
-		t.Errorf("expected SHUTDOWN event, got %q", pub.SystemEvents[0].Event)
+	if !gotHeartbeat {
+		t.Error("expected ready HEARTBEAT system event")
+	}
+	if !gotShutdown {
+		t.Error("expected SHUTDOWN system event")
 	}
 }
 
@@ -350,8 +359,9 @@ func TestRunLoopHeartbeat(t *testing.T) {
 			shutdowns++
 		}
 	}
-	if heartbeats != 1 {
-		t.Errorf("expected 1 HEARTBEAT event, got %d", heartbeats)
+	// 2 heartbeats: ready (on baseline) + scheduled (after interval elapses)
+	if heartbeats != 2 {
+		t.Errorf("expected 2 HEARTBEAT events (ready + scheduled), got %d", heartbeats)
 	}
 	if shutdowns != 1 {
 		t.Errorf("expected 1 SHUTDOWN event, got %d", shutdowns)
@@ -402,17 +412,19 @@ func TestRunLoopShutdownSIGINT(t *testing.T) {
 		t.Fatalf("runLoop returned error: %v", err)
 	}
 
-	if len(pub.SystemEvents) != 1 {
-		t.Fatalf("expected 1 system event, got %d", len(pub.SystemEvents))
+	var se *mqtt.SystemEvent
+	for i := range pub.SystemEvents {
+		if pub.SystemEvents[i].Event == "SHUTDOWN" {
+			se = &pub.SystemEvents[i]
+		}
 	}
-	se := pub.SystemEvents[0]
-	if se.Event != "SHUTDOWN" {
-		t.Errorf("expected SHUTDOWN, got %q", se.Event)
+	if se == nil {
+		t.Fatal("expected SHUTDOWN system event")
 	}
 	if se.Reason != "SIGINT" {
 		t.Errorf("expected reason SIGINT, got %q", se.Reason)
 	}
-	if se.Retained != true {
+	if !se.Retained {
 		t.Error("expected Retained=true for SHUTDOWN")
 	}
 }
@@ -428,17 +440,19 @@ func TestRunLoopShutdownSIGTERM(t *testing.T) {
 		t.Fatalf("runLoop returned error: %v", err)
 	}
 
-	if len(pub.SystemEvents) != 1 {
-		t.Fatalf("expected 1 system event, got %d", len(pub.SystemEvents))
+	var se *mqtt.SystemEvent
+	for i := range pub.SystemEvents {
+		if pub.SystemEvents[i].Event == "SHUTDOWN" {
+			se = &pub.SystemEvents[i]
+		}
 	}
-	se := pub.SystemEvents[0]
-	if se.Event != "SHUTDOWN" {
-		t.Errorf("expected SHUTDOWN, got %q", se.Event)
+	if se == nil {
+		t.Fatal("expected SHUTDOWN system event")
 	}
 	if se.Reason != "SIGTERM" {
 		t.Errorf("expected reason SIGTERM, got %q", se.Reason)
 	}
-	if se.Retained != true {
+	if !se.Retained {
 		t.Error("expected Retained=true for SHUTDOWN")
 	}
 }
@@ -586,6 +600,59 @@ func TestRunLoopUpdatesTracker(t *testing.T) {
 	}
 	if !snap.MQTTConnected {
 		t.Error("tracker should show MQTT connected")
+	}
+}
+
+func TestRunLoopReadyHeartbeat(t *testing.T) {
+	// Baseline establishes after 4 ticks. Heartbeat interval is disabled (0).
+	// A single HEARTBEAT should still fire immediately on baseline.
+	samples := repeat(gpio.Sample{CH: true, HW: false}, 4)
+	reader := gpio.NewFakeReader(samples)
+	pub := mqtt.NewFakePublisher()
+	clock := fakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), 100*time.Millisecond)
+
+	err := runRunLoop(t, reader, pub, 250*time.Millisecond, 0, clock, len(samples), syscall.SIGTERM)
+	if err != nil {
+		t.Fatalf("runLoop returned error: %v", err)
+	}
+
+	var heartbeats []mqtt.SystemEvent
+	for _, se := range pub.SystemEvents {
+		if se.Event == "HEARTBEAT" {
+			heartbeats = append(heartbeats, se)
+		}
+	}
+	if len(heartbeats) != 1 {
+		t.Fatalf("expected 1 ready HEARTBEAT, got %d", len(heartbeats))
+	}
+	if !heartbeats[0].Retained {
+		t.Error("ready HEARTBEAT must be retained")
+	}
+}
+
+func TestRunLoopReadyHeartbeatFiredOnce(t *testing.T) {
+	// Baseline establishes, then more ticks follow. Ready heartbeat fires exactly once.
+	samples := append(
+		repeat(gpio.Sample{CH: false, HW: false}, 4), // baseline
+		repeat(gpio.Sample{CH: false, HW: false}, 4)..., // stable after baseline
+	)
+	reader := gpio.NewFakeReader(samples)
+	pub := mqtt.NewFakePublisher()
+	clock := fakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), 100*time.Millisecond)
+
+	err := runRunLoop(t, reader, pub, 250*time.Millisecond, 0, clock, len(samples), syscall.SIGTERM)
+	if err != nil {
+		t.Fatalf("runLoop returned error: %v", err)
+	}
+
+	var heartbeats int
+	for _, se := range pub.SystemEvents {
+		if se.Event == "HEARTBEAT" {
+			heartbeats++
+		}
+	}
+	if heartbeats != 1 {
+		t.Errorf("expected exactly 1 HEARTBEAT, got %d", heartbeats)
 	}
 }
 
