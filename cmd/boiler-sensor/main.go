@@ -78,12 +78,7 @@ func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, p
 
 	// Publish startup event with full status snapshot
 	snap := tracker.Snapshot()
-	startupEvent := mqtt.SystemEvent{
-		Timestamp:  snap.Now,
-		Event:      "STARTUP",
-		Retained:   true,
-		RawPayload: status.FormatStatusEvent(snap, "STARTUP", ""),
-	}
+	startupEvent := buildStartupEvent(snap)
 	if err := publisher.PublishSystem(startupEvent); err != nil {
 		log.Printf("failed to publish startup event: %v", err)
 	} else {
@@ -210,6 +205,7 @@ func runLoop(gpioReader gpio.Reader, publisher mqtt.Publisher, mqttStatus mqtt.C
 				hbEvent := mqtt.SystemEvent{
 					Timestamp: hbData.Timestamp,
 					Event:     "HEARTBEAT",
+					Retained:  true,
 				}
 				if tracker != nil {
 					if mqttStatus != nil {
@@ -263,6 +259,14 @@ func readNetworkInfo() *status.NetworkInfo {
 		Gateway:    os.Getenv(envNetworkGateway),
 		WifiStatus: os.Getenv(envNetworkWifiStatus),
 		SSID:       os.Getenv(envNetworkWifiSSID),
+	}
+}
+
+func buildStartupEvent(snap status.Snapshot) mqtt.SystemEvent {
+	return mqtt.SystemEvent{
+		Timestamp:  snap.Now,
+		Event:      "STARTUP",
+		RawPayload: status.FormatStatusEvent(snap, "STARTUP", ""),
 	}
 }
 

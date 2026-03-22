@@ -589,6 +589,39 @@ func TestRunLoopUpdatesTracker(t *testing.T) {
 	}
 }
 
+func TestBuildStartupEventNotRetained(t *testing.T) {
+	snap := status.Snapshot{}
+	se := buildStartupEvent(snap)
+	if se.Event != "STARTUP" {
+		t.Errorf("expected STARTUP, got %q", se.Event)
+	}
+	if se.Retained {
+		t.Error("STARTUP event must not be retained (new subscribers would receive stale boot state)")
+	}
+}
+
+func TestRunLoopHeartbeatRetained(t *testing.T) {
+	step := 5 * time.Minute
+	debounce := 10 * time.Minute
+	heartbeatInterval := 15 * time.Minute
+
+	samples := repeat(gpio.Sample{CH: false, HW: false}, 4)
+	reader := gpio.NewFakeReader(samples)
+	pub := mqtt.NewFakePublisher()
+	clock := fakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), step)
+
+	err := runRunLoop(t, reader, pub, debounce, heartbeatInterval, clock, len(samples), syscall.SIGTERM)
+	if err != nil {
+		t.Fatalf("runLoop returned error: %v", err)
+	}
+
+	for _, se := range pub.SystemEvents {
+		if se.Event == "HEARTBEAT" && !se.Retained {
+			t.Error("HEARTBEAT event must be retained (new subscribers need current state)")
+		}
+	}
+}
+
 func TestResolveWSBroker(t *testing.T) {
 	tests := []struct {
 		name   string
