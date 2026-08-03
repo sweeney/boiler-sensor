@@ -11,37 +11,54 @@ Go daemon for Raspberry Pi Zero that monitors heating system GPIO inputs and pub
 ```bash
 go build ./...              # Build all packages
 go test ./...               # Run all tests
-go test -cover ./internal/logic/  # Test with coverage (100% required for logic)
 go vet ./...                # Lint
 ```
 
+The generic engine (and its 100%-covered logic tests) lives in the
+`github.com/sweeney/common/iot` module — run its suite there.
+
 ## Architecture
 
-**Strict separation is critical for testability:**
+The sensor engine has been extracted into the shared, sensor-agnostic module
+`github.com/sweeney/common/iot`. This repo is now just the **boiler binary**: it
+supplies a boiler `SensorProfile`, hands off to the shared daemon runtime
+`iot.Run` (poll/debounce/publish/lifecycle), and serves its own status page. No
+engine code lives here anymore.
 
 ```
-cmd/boiler-sensor/    # Main entry point, flags, wiring. NO business logic.
-internal/logic/       # Pure business logic. NO external dependencies.
-internal/gpio/        # GPIO abstraction (real + fake implementations)
-internal/mqtt/        # MQTT abstraction (real + fake implementations)
-internal/status/      # Thread-safe status tracker (shared by web + future LED drivers)
-internal/web/         # HTTP status server (JSON + HTML endpoints)
+cmd/boiler-sensor/    # main.go: flags, wiring + boilerProfile(), iot.Run(). The
+                      #   ONLY place boiler vocabulary (ch/hw, CH_ON…, pins,
+                      #   topics, title) lives. Plus the wire-contract golden test.
+internal/web/         # this service's own HTTP status page (presentation, not
+                      #   engine). Reads iot/status; each sensor rolls its own UI.
 ```
 
-### `internal/logic` Rules (Non-Negotiable)
+The engine packages it consumes: `iot` (the `Run` runtime), `iot/profile`,
+`iot/logic`, `iot/gpio`, `iot/mqtt`, `iot/status`. The HTTP/HTML status UI is
+deliberately NOT in `common/iot` — it's service-specific presentation, so it
+lives here in `internal/web`.
 
-- **Zero imports** from GPIO, MQTT, OS, or `time.Sleep`
-- Time must be injectable via `time.Time` parameter
-- Input: logical states (chOn, hwOn) + current time
-- Output: domain events
-- **100% test coverage required**
+During local development the dependency is resolved via a `replace` directive in
+`go.mod` pointing at `../common/iot` (until `iot` is tagged).
 
-### GPIO Signal Inversion
+### Engine rules (enforced in `common/iot`, not here)
 
-Raw GPIO active = logical OFF. This inversion must be handled in exactly one place (in `internal/gpio`, not in logic).
+These invariants are now owned and tested by the `common/iot` module:
 
-- Central Heating: BCM 26
-- Hot Water: BCM 16
+- **`iot/logic` zero-deps + 100% coverage**: no imports from GPIO, MQTT, OS, or
+  `time.Sleep`; time injected via `time.Time`; 100% test coverage required.
+- **Single-place GPIO inversion**: raw GPIO active = logical OFF is applied in
+  exactly one place — `iot/gpio`, per each channel's `ActiveLow` flag — never in
+  logic. The boiler profile sets `ActiveLow: true` on both channels.
+
+### Boiler profile (the only boiler-specific config)
+
+`boilerProfile()` in `cmd/boiler-sensor/main.go` defines:
+
+- Channels `ch` (Central Heating, BCM 26) and `hw` (Hot Water, BCM 16), both
+  `ActiveLow`, emitting `CH_ON`/`CH_OFF` and `HW_ON`/`HW_OFF`.
+- Topics `energy/boiler/sensor/events` and `energy/boiler/sensor/system`,
+  payload root `boiler`, web title `Boiler Sensor`.
 
 ## Runtime Behavior
 
@@ -71,14 +88,16 @@ Topic: `energy/boiler/sensor/events`
 
 Tests must pass on GitHub Actions (Linux amd64) without GPIO or MQTT hardware.
 
-**Unit tests for `internal/logic`** must cover:
-- Stable states producing no events
-- Single transitions
-- Bounce/noise shorter than debounce duration
-- Back-to-back transitions
-- Startup baseline behavior
+Engine behaviour (debounce, baseline, bounce rejection, back-to-back
+transitions) is covered by the `common/iot` suite. This repo keeps
+**boiler-specific** coverage:
 
-**Integration tests** use fake GPIO + fake MQTT to verify exact publish order, topics, JSON structure, and timestamps.
+- `cmd/boiler-sensor/wire_contract_test.go` — the **golden**: pins the EXACT
+  ordered MQTT bytes (event payloads + heartbeat) the boiler profile produces
+  through the iot engine. Treat any diff in these literals as a regression.
+- `cmd/boiler-sensor/main_test.go` — `boilerProfile()` correctness and `runLoop`
+  lifecycle (baseline, ready/scheduled heartbeats, shutdown/LWT, network info)
+  driven by fake GPIO + fake MQTT.
 
 ## Dependencies
 

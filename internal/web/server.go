@@ -1,4 +1,7 @@
-// Package web provides an HTTP status server for the boiler-sensor daemon.
+// Package web provides this service's HTTP status page. The UI is
+// service-specific presentation (not engine), so each sensor binary owns its
+// own copy; it reads state from the shared iot/status tracker and renders N
+// channels generically from a View derived from the sensor profile.
 package web
 
 import (
@@ -7,21 +10,59 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/sweeney/boiler-sensor/internal/status"
+	"github.com/sweeney/common/iot/profile"
+	"github.com/sweeney/common/iot/status"
 )
 
 //go:embed static/mqtt.min.js
 var mqttJS []byte
 
+// ChannelView is one row in the status page's State table.
+type ChannelView struct {
+	// Key is the channel key, used to wire live MQTT updates (msg.<root>.<key>).
+	Key string
+	// Label is the human-readable row label, e.g. "Central Heating".
+	Label string
+}
+
+// View holds the per-binary presentation vocabulary the status page renders
+// with. It is derived from the sensor profile by the cmd/*-sensor binary.
+type View struct {
+	// Title is the page heading, e.g. "Boiler Sensor".
+	Title string
+	// Channels are the state rows, in profile order.
+	Channels []ChannelView
+	// PayloadRoot is the JSON root key of event payloads, e.g. "boiler".
+	PayloadRoot string
+	// EventTopic is the MQTT topic the live-update script subscribes to.
+	EventTopic string
+}
+
+// ViewForProfile derives a presentation View from a sensor profile.
+func ViewForProfile(p profile.SensorProfile) View {
+	channels := make([]ChannelView, len(p.Channels))
+	for i, c := range p.Channels {
+		channels[i] = ChannelView{Key: c.Key, Label: c.Label}
+	}
+	return View{
+		Title:       p.WebTitle,
+		Channels:    channels,
+		PayloadRoot: p.PayloadRoot,
+		EventTopic:  p.EventTopic,
+	}
+}
+
 // Server serves the status page over HTTP.
 type Server struct {
 	httpServer *http.Server
 	tracker    *status.Tracker
+	view       View
 }
 
-// New creates a Server that reads state from the given tracker.
-func New(addr string, tracker *status.Tracker) *Server {
-	s := &Server{tracker: tracker}
+// NewWithView creates a Server that reads state from the given tracker using
+// the given presentation view.
+func NewWithView(addr string, tracker *status.Tracker, view View) *Server {
+	s := &Server{tracker: tracker, view: view}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
@@ -58,7 +99,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	snap := s.tracker.Snapshot()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	renderHTML(w, snap)
+	renderHTML(w, snap, s.view)
 }
 
 func (s *Server) handleJSON(w http.ResponseWriter, r *http.Request) {

@@ -6,7 +6,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/sweeney/boiler-sensor/internal/status"
+	"github.com/sweeney/common/iot/status"
 )
 
 var indexTmpl = template.Must(template.New("index").Funcs(template.FuncMap{
@@ -40,7 +40,7 @@ const indexHTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Boiler Sensor</title>
+<title>{{.View.Title}}</title>
 <style>
 body { font-family: monospace; max-width: 600px; margin: 2em auto; padding: 0 1em; }
 h1 { font-size: 1.4em; }
@@ -59,13 +59,12 @@ th { width: 40%; }
 </style>
 </head>
 <body>
-<h1>Boiler Sensor{{if .Config.WSBroker}}<span id="live-dot" class="live-dot pending" title="connecting"></span>{{end}}</h1>
+<h1>{{.View.Title}}{{if .Config.WSBroker}}<span id="live-dot" class="live-dot pending" title="connecting"></span>{{end}}</h1>
 
 <h2>State</h2>
 <table>
-<tr><th>Central Heating</th><td id="ch-state" class="{{if eq (stateOrUnknown (printf "%s" .CH)) "ON"}}on{{else if eq (stateOrUnknown (printf "%s" .CH)) "OFF"}}off{{else}}unknown{{end}}">{{stateOrUnknown (printf "%s" .CH)}}</td></tr>
-<tr><th>Hot Water</th><td id="hw-state" class="{{if eq (stateOrUnknown (printf "%s" .HW)) "ON"}}on{{else if eq (stateOrUnknown (printf "%s" .HW)) "OFF"}}off{{else}}unknown{{end}}">{{stateOrUnknown (printf "%s" .HW)}}</td></tr>
-<tr><th>Ready</th><td>{{if .Baselined}}yes{{else}}no{{end}}</td></tr>
+{{range .View.Channels}}<tr><th>{{.Label}}</th><td id="state-{{.Key}}" class="{{$s := index $.States .Key}}{{if eq $s "ON"}}on{{else if eq $s "OFF"}}off{{else}}unknown{{end}}">{{index $.States .Key}}</td></tr>
+{{end}}<tr><th>Ready</th><td>{{if .Baselined}}yes{{else}}no{{end}}</td></tr>
 </table>
 
 <h2>Connectivity</h2>
@@ -78,11 +77,8 @@ th { width: 40%; }
 
 <h2>Event Counts</h2>
 <table>
-<tr><th>CH ON</th><td>{{.Counts.CHOn}}</td></tr>
-<tr><th>CH OFF</th><td>{{.Counts.CHOff}}</td></tr>
-<tr><th>HW ON</th><td>{{.Counts.HWOn}}</td></tr>
-<tr><th>HW OFF</th><td>{{.Counts.HWOff}}</td></tr>
-</table>
+{{range .CountRows}}<tr><th>{{.Label}}</th><td>{{.Count}}</td></tr>
+{{end}}</table>
 
 <h2>System</h2>
 <table>
@@ -100,12 +96,14 @@ th { width: 40%; }
 <script>
 (function() {
   var broker = "{{.Config.WSBroker}}";
-  var topic = "energy/boiler/sensor/events";
+  var topic = "{{.View.EventTopic}}";
+  var root = "{{.View.PayloadRoot}}";
+  var keys = [{{range $i, $c := .View.Channels}}{{if $i}},{{end}}"{{$c.Key}}"{{end}}];
   var dot = document.getElementById("live-dot");
-  var chEl = document.getElementById("ch-state");
-  var hwEl = document.getElementById("hw-state");
 
-  function setState(el, state) {
+  function setState(key, state) {
+    var el = document.getElementById("state-" + key);
+    if (!el) return;
     el.textContent = state;
     el.className = state === "ON" ? "on" : state === "OFF" ? "off" : "unknown";
   }
@@ -137,9 +135,11 @@ th { width: 40%; }
   client.on("message", function(t, payload) {
     try {
       var msg = JSON.parse(payload.toString());
-      if (msg.boiler) {
-        setState(chEl, msg.boiler.ch.state);
-        setState(hwEl, msg.boiler.hw.state);
+      var body = msg[root];
+      if (body) {
+        keys.forEach(function(k) {
+          if (body[k] && body[k].state) setState(k, body[k].state);
+        });
       }
     } catch (e) {}
   });
@@ -150,14 +150,45 @@ th { width: 40%; }
 </html>
 `
 
-func renderHTML(w io.Writer, snap status.Snapshot) {
+// countRow is one row in the Event Counts table.
+type countRow struct {
+	Label string
+	Count int
+}
+
+func renderHTML(w io.Writer, snap status.Snapshot, view View) {
+	// Per-channel display states, keyed by channel key, defaulting to UNKNOWN.
+	states := make(map[string]string, len(view.Channels))
+	for _, c := range view.Channels {
+		s := string(snap.States[c.Key])
+		if s == "" {
+			s = "UNKNOWN"
+		}
+		states[c.Key] = s
+	}
+
+	// Event-count rows in profile order: "<Label> ON" / "<Label> OFF".
+	var countRows []countRow
+	for _, c := range snap.Profile.Channels {
+		countRows = append(countRows,
+			countRow{Label: c.Label + " ON", Count: snap.GenericCounts[c.OnEvent]},
+			countRow{Label: c.Label + " OFF", Count: snap.GenericCounts[c.OffEvent]},
+		)
+	}
+
 	// Snapshot has Uptime() method but template needs a Duration field.
 	data := struct {
 		status.Snapshot
-		Uptime time.Duration
+		Uptime    time.Duration
+		View      View
+		States    map[string]string
+		CountRows []countRow
 	}{
-		Snapshot: snap,
-		Uptime:   snap.Uptime(),
+		Snapshot:  snap,
+		Uptime:    snap.Uptime(),
+		View:      view,
+		States:    states,
+		CountRows: countRows,
 	}
 	indexTmpl.Execute(w, data)
 }
