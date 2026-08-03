@@ -1,8 +1,13 @@
 # Built binaries (root level only)
 /heating-sense
 /heating-sense-arm
+/boiler-sensor
 /boiler-sensor-arm
 *.exe
+
+# Local multi-module workspace (points at ../common/iot during development)
+go.work
+go.work.sum
 
 # Test artifacts
 coverage.out

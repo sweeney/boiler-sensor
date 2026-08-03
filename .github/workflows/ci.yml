@@ -41,16 +41,12 @@ jobs:
           set -o pipefail
           go test -v -race -coverprofile=coverage.out -json ./... 2>&1 | tee test-results.json || echo "TEST_FAILED=true" >> $GITHUB_ENV
 
-      - name: Check logic coverage
-        run: |
-          go test -coverprofile=logic.out ./internal/logic/
-          COVERAGE=$(go tool cover -func=logic.out | grep total | awk '{print $3}' | sed 's/%//')
-          echo "Logic package coverage: ${COVERAGE}%"
-          # Fail if coverage is below 100%
-          if [ "$(echo "$COVERAGE < 100" | bc)" -eq 1 ]; then
-            echo "ERROR: internal/logic coverage must be 100%, got ${COVERAGE}%"
-            exit 1
-          fi
+      # The engine's 100%-coverage invariant (internal/logic) moved out with the
+      # engine: it is now enforced by the iot workflow in sweeney/common. What
+      # this repo must guarantee instead is that the boiler profile still
+      # serializes to the exact bytes the broker has always received.
+      - name: Check wire contract golden
+        run: go test -run TestWireContract -v ./cmd/boiler-sensor/
 
       - name: Generate HTML coverage report
         run: |
@@ -98,7 +94,7 @@ jobs:
           echo "### Coverage by Package" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          for pkg in internal/logic internal/gpio internal/mqtt; do
+          for pkg in cmd/boiler-sensor internal/web; do
             if go test -coverprofile=tmp.out ./$pkg/ 2>/dev/null; then
               COV=$(go tool cover -func=tmp.out | grep total | awk '{print $3}' | tr -d '%')
               if [ -n "$COV" ]; then
