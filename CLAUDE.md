@@ -38,8 +38,22 @@ The engine packages it consumes: `iot` (the `Run` runtime), `iot/profile`,
 deliberately NOT in `common/iot` — it's service-specific presentation, so it
 lives here in `internal/web`.
 
-During local development the dependency is resolved via a `replace` directive in
-`go.mod` pointing at `../common/iot` (until `iot` is tagged).
+`go.mod` pins the published `github.com/sweeney/common/iot v0.1.0` — there is no
+`replace` directive, so the build does not depend on a sibling checkout.
+
+To work on the engine and this binary together, create a **gitignored** `go.work`
+(never commit it, and never put one at `~/src/github.com/sweeney/` — a workspace
+file there forces every sibling repo into workspace mode and breaks their builds):
+
+```
+go 1.21
+use (
+	/abs/path/to/common/iot
+	/abs/path/to/boiler-sensor
+)
+// Version-specific: a bare replace of a `use`d module is rejected by go.
+replace github.com/sweeney/common/iot v0.1.0 => /abs/path/to/common/iot
+```
 
 ### Engine rules (enforced in `common/iot`, not here)
 
