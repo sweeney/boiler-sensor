@@ -1,6 +1,6 @@
 # boiler-sensor
 
-A Go daemon for Raspberry Pi that monitors heating system GPIO inputs and publishes state transitions to MQTT. Designed for a Pi Zero running 32-bit Raspberry Pi OS Lite, but fully testable on any platform without hardware.
+A Go daemon for Raspberry Pi that monitors heating system GPIO inputs and publishes state transitions to MQTT. 
 
 ## What It Does
 
