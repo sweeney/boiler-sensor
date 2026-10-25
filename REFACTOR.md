@@ -1,10 +1,11 @@
 # Refactor plan: generalize the sensor engine, then extract `common/iot`
 
-> **Status: complete.** All five steps are done. The engine lives in
-> `github.com/sweeney/common/iot` at `iot/v0.1.0`; `boiler-sensor` and
-> `doorbell-sensor` both pin that tag and are green. This document is kept as the
-> record of why the split is shaped the way it is — see the open question at the
-> end for the one decision still outstanding.
+> **Status: complete; re-planned 2026-10-25.** All five steps are done. The
+> engine lives in `github.com/sweeney/common/iot` at `iot/v0.1.0`, now published.
+> `boiler-sensor` pins that tag and is the one live consumer. `doorbell-sensor`
+> validated the API and is parked (deprioritised, not published). `iot` is scoped
+> to GPIO on/off sensors; see `common/PLAN.md` for the re-plan. This document is
+> kept as the record of why the split is shaped the way it is.
 
 ## Goal
 
@@ -191,9 +192,13 @@ the profile and the template renders N channels. Moving it to `common/iot/web`
 would be mechanical, and a sensor that later needs a bespoke page simply stops
 calling it. Decide before a third sensor appears.
 
+**Decided 2026-10-25: it stays per repo.** The third sensor, tanktemp, is numeric
+and won't use `iot/status`, and the doorbell is parked, so boiler is the only
+live copy and there is nothing to deduplicate.
+
 ## Deferred / out of scope
 
-- Migrating `identity/common` (auth, db, backup, …) into `sweeney/common` — happens
-  later when boiler-service actually needs auth; it's a module-path breaking change
-  for identity + config and should be batched separately.
-- `auth` for boiler-service: future; will consume `common/auth`, independent of `iot`.
+- Migrating `identity/common` into `sweeney/common`: not as one batch. It now has
+  six consumers, so the generic packages move one module at a time when a
+  consumer is being changed anyway, and `auth` stays in identity. See
+  `common/PLAN.md`.
