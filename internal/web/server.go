@@ -54,6 +54,9 @@ func ViewForProfile(p profile.SensorProfile) View {
 
 // Server serves the status page over HTTP.
 type Server struct {
+	// Version names the running build (the commit) in /healthz.
+	Version string
+
 	httpServer *http.Server
 	tracker    *status.Tracker
 	view       View
@@ -69,6 +72,7 @@ func NewWithView(addr string, tracker *status.Tracker, view View) *Server {
 	mux.HandleFunc("/index.html", s.handleIndex)
 	mux.HandleFunc("/index.json", s.handleJSON)
 	mux.HandleFunc("/mqtt.min.js", handleMQTTJS)
+	mux.HandleFunc("/healthz", s.handleHealthz)
 
 	s.httpServer = &http.Server{
 		Addr:    addr,

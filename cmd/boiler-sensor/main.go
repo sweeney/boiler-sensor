@@ -23,6 +23,12 @@ import (
 	"github.com/sweeney/common/iot/status"
 )
 
+// version names the build: the commit, stamped by deploy.sh with
+// -ldflags "-X main.version=...". It is logged at startup and reported by
+// /healthz, so the deploy can check that the build it installed is the one
+// answering.
+var version = "dev"
+
 // Default boiler wiring and topics. These are the ONLY place boiler vocabulary
 // (pins, CH/HW, topics) is defined now that the engine is sensor-agnostic.
 const (
@@ -63,6 +69,7 @@ func main() {
 	wsBroker := flag.String("ws-broker", "=broker", `MQTT websocket URL for live UI ("=broker" derives from --broker, "off" disables)`)
 
 	flag.Parse()
+	log.Printf("boiler-sensor %s", version)
 
 	ws := resolveWSBroker(*wsBroker, *broker)
 	if err := run(*poll, *debounce, *broker, *heartbeat, *pinCH, *pinHW, *printState, *httpAddr, ws); err != nil {
@@ -107,6 +114,7 @@ func run(poll, debounce time.Duration, broker string, heartbeat time.Duration, p
 	// Serve this service's own status page (presentation is not engine).
 	if httpAddr != "" {
 		srv := web.NewWithView(httpAddr, tracker, web.ViewForProfile(prof))
+		srv.Version = version
 		go func() {
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Printf("http server error: %v", err)
