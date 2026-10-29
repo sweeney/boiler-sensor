@@ -198,7 +198,6 @@ live copy and there is nothing to deduplicate.
 
 ## Deferred / out of scope
 
-- Migrating `identity/common` into `sweeney/common`: not as one batch. It now has
-  six consumers, so the generic packages move one module at a time when a
-  consumer is being changed anyway, and `auth` stays in identity. See
+- `identity/common` → `sweeney/common`: done separately (2026-10-27/28). `db`,
+  `backup` and `web` moved with history; `auth` stays in identity. See
   `common/PLAN.md`.

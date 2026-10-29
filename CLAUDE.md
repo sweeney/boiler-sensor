@@ -109,9 +109,23 @@ transitions) is covered by the `common/iot` suite. This repo keeps
 - `cmd/boiler-sensor/wire_contract_test.go` — the **golden**: pins the EXACT
   ordered MQTT bytes (event payloads + heartbeat) the boiler profile produces
   through the iot engine. Treat any diff in these literals as a regression.
-- `cmd/boiler-sensor/main_test.go` — `boilerProfile()` correctness and `runLoop`
-  lifecycle (baseline, ready/scheduled heartbeats, shutdown/LWT, network info)
-  driven by fake GPIO + fake MQTT.
+- `cmd/boiler-sensor/lifecycle_golden_test.go` — drives `iot.Run` with the real
+  `boilerProfile()` (STARTUP, baseline, ready HEARTBEAT, single and simultaneous
+  transitions, scheduled HEARTBEAT with network info, SHUTDOWN) and pins every
+  payload, topic and retain flag to what the pre-refactor build published. The
+  literals were captured from that build: never edit them to make a test pass.
+- `cmd/boiler-sensor/main_test.go` — `boilerProfile()` and `--ws-broker`.
+- `internal/web` — status page, `/index.json` and `/healthz`.
+- `deploy_test.sh` — `deploy.sh` against stubs (refusals, rollback paths).
+
+## Deploying
+
+`./deploy.sh --check` first (read-only), then `./deploy.sh`. It deploys only a
+clean, pushed commit (the build is stamped with the hash and `/healthz` reports
+it, so settle commit dates before deploying), verifies `/healthz`, the journal
+and the broker heartbeat, and rolls back on its own if any check fails.
+`./deploy.sh --rollback` returns to the previous build. Change `deploy.sh` only
+with a matching case in `deploy_test.sh`.
 
 ## Dependencies
 

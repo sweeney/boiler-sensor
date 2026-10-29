@@ -13,16 +13,20 @@ A Go daemon for Raspberry Pi that monitors heating system GPIO inputs and publis
 
 ## Architecture
 
+The sensor engine (debounce, baseline, heartbeat, MQTT plumbing and the daemon
+runtime) lives in the shared module
+[`github.com/sweeney/common/iot`](https://github.com/sweeney/common/tree/main/iot),
+pinned at `iot/v0.1.0`. This repo is the boiler binary on top of it:
+
 ```
-cmd/boiler-sensor/    # Entry point, flags, wiring — no business logic
-internal/logic/       # Pure business logic — no external dependencies
-internal/gpio/        # GPIO abstraction (real + fake implementations)
-internal/mqtt/        # MQTT abstraction (real + fake implementations)
-internal/status/      # Thread-safe status tracker (shared by web + MQTT)
-internal/web/         # HTTP status server (JSON + HTML endpoints)
+cmd/boiler-sensor/    # flags, wiring and boilerProfile(): the only place the
+                      #   boiler vocabulary (CH/HW, pins, topics) lives
+internal/web/         # this service's HTTP status page and /healthz
 ```
 
-The strict separation between pure logic and I/O is the foundation of the project's testability. The logic package has zero imports from GPIO, MQTT, OS, or `time.Sleep` — all time is injected via parameters.
+The engine's packages are `iot/logic` (pure debounce logic, no I/O, 100%
+covered), `iot/gpio`, `iot/mqtt`, `iot/status` and `iot.Run`. See `REFACTOR.md`
+for why the split is shaped this way.
 
 ## GPIO
 
@@ -37,15 +41,10 @@ Pin numbers are configurable via `--pin-ch` and `--pin-hw` flags.
 
 The optocoupler modules have inverted output: when heating is ON, current flows through the LED, the phototransistor conducts, pulling the output LOW. When heating is OFF, no current flows and the pull-up resistor holds the output HIGH.
 
-This inversion is isolated to a single location (`internal/gpio/real.go`):
-
-```go
-// Invert: raw active (1) = OFF, raw inactive (0) = ON
-chOn := chRaw == 0
-hwOn := hwRaw == 0
-```
-
-The rest of the codebase works with logical states where `true` = ON. To switch to conventional modules (HIGH = ON), change these two comparisons to `== 1`.
+The inversion is applied in exactly one place, `iot/gpio`, for each channel
+whose profile sets `ActiveLow: true` (both do, in `boilerProfile()`). Everything
+else works with logical states where `true` = ON. For conventional modules
+(HIGH = ON), set `ActiveLow: false`.
 
 ## MQTT
 
@@ -103,10 +102,15 @@ The daemon serves a lightweight status page over HTTP (default port 80):
 
 - `GET /` or `GET /index.html` — HTML status page with channel states, MQTT connectivity, event counts, uptime, and config
 - `GET /index.json` — JSON status response for programmatic access
+- `GET /healthz` — health for monitors and the deploy script: `status`
+  (`ok`, `starting` before the GPIO baseline, or `degraded` while MQTT is
+  disconnected), `version` (the commit), uptime, channel states, and memory
+  and goroutine counts. Always HTTP 200; read `status`.
 
 ```bash
 curl http://pi0wh/              # HTML page
 curl http://pi0wh/index.json    # JSON response
+curl http://pi0wh/healthz       # health
 ```
 
 Disable with `--http ""`.
@@ -134,34 +138,20 @@ The architecture enforces a hard rule: `internal/logic` must have **zero imports
 
 ### Test Layers
 
-**Unit tests (`internal/logic`)** — 100% coverage enforced by CI. These test the debounce state machine in isolation:
-- Baseline establishment timing
-- Single and simultaneous transitions
-- Bounce/noise rejection (signals shorter than debounce duration)
-- Back-to-back transitions
-- Heartbeat generation and event counting
-- Edge cases at exact debounce boundaries
+The engine's own suite (debounce state machine at 100% coverage, fuzz test,
+GPIO/MQTT fakes, ring buffer, status tracker, runtime lifecycle) lives with the
+engine in `sweeney/common/iot`. This repo tests what is boiler-specific:
 
-**Fuzz test (`internal/logic`)** — feeds random sequences of GPIO samples into the detector and asserts invariants: no panics, valid event types, monotonic timestamps, no events before baseline, consistent event counts.
-
-**Package-level unit tests** — each package tests its own concerns:
-- `internal/gpio`: fake reader behaviour (sequential reads, error injection, reset)
-- `internal/mqtt`: payload formatting and JSON round-trips, fake publisher recording, ring buffer for offline buffering
-- `internal/status`: thread-safe tracker updates, snapshot immutability, JSON serialization
-- `internal/web`: HTTP endpoint responses, content types, state reflection
-
-**Integration tests (`internal/`)** — wire together fake GPIO + logic detector + fake MQTT publisher to verify the full pipeline:
-- Exact event ordering from GPIO samples through to published JSON
-- Payload format validation against expected JSON strings
-- System event lifecycle (startup, transitions, heartbeat, shutdown)
-- Graceful handling of publish failures
-- Retained message flags for LWT and lifecycle events
-
-**Main loop tests (`cmd/boiler-sensor`)** — test the `runLoop` function with injected dependencies:
-- Signal handling (SIGINT, SIGTERM)
-- GPIO error recovery
-- Heartbeat scheduling
-- Network info propagation
+- **Wire contract (`cmd/boiler-sensor/wire_contract_test.go`)** — the exact MQTT
+  bytes the boiler profile produces. Any diff is a regression.
+- **Lifecycle golden (`cmd/boiler-sensor/lifecycle_golden_test.go`)** — drives
+  `iot.Run` with the real `boilerProfile()` through startup, baseline, single and
+  simultaneous transitions, a scheduled heartbeat and SIGTERM, and pins every
+  payload, topic and retain flag to what the pre-refactor build published.
+- **Profile and flags (`cmd/boiler-sensor/main_test.go`)**.
+- **Status page and `/healthz` (`internal/web`)**.
+- **Deploy script (`deploy_test.sh`)** — runs `deploy.sh` against stubs: the
+  happy path, refusals, and rollback on each kind of failed verification.
 
 ### Running Tests
 
@@ -169,37 +159,53 @@ The architecture enforces a hard rule: `internal/logic` must have **zero imports
 go test ./...                    # Run all tests
 go test -race ./...              # With race detector
 go test -cover ./...             # With coverage summary
-go test -coverprofile=c.out ./internal/logic/ && go tool cover -html=c.out  # HTML coverage report
+./deploy_test.sh                 # deploy script tests
 ```
 
 ### CI
 
 GitHub Actions runs on every push to `main` and on pull requests:
 
-1. **Test job** — `go vet`, tests with race detection, mandatory 100% coverage gate on `internal/logic`, per-package coverage reporting
+1. **Test job** — `go vet`, tests with race detection, the wire-contract golden, per-package coverage reporting (the 100% gate on `logic` runs in `sweeney/common`)
 2. **Build job** — cross-compiles for linux/amd64, linux/arm (Pi Zero), and linux/arm64
 
 ## Deployment
 
-Use `deploy.sh` to build, upload, and restart the service in one command:
-
 ```bash
-./deploy.sh              # default: sweeney@pi0wh
-./deploy.sh user@host    # different target
+./deploy.sh --check      # read-only: every pre-flight check, changes nothing
+./deploy.sh              # deploy to sweeney@pi0wh, asking before changing anything
+./deploy.sh --yes        # without asking
+./deploy.sh --rollback   # back to the build that ran before the last deploy
+./deploy.sh user@host    # a different Pi
 ```
 
-The script:
-1. Cross-compiles for ARM v6
-2. Uploads a timestamped binary
-3. Swaps the symlink (`boiler-sensor-arm` -> `boiler-sensor-<timestamp>`)
-4. Runs first-time setup if the system symlinks don't exist yet
-5. Restarts the systemd service
-6. Cleans old versions (keeps 3)
-7. Shows recent journal output
+A deploy:
+
+1. **Checks, read-only:** a clean commit that is pushed (the build is stamped
+   with the commit, so its hash must be final), `go vet` and `go test`, the Pi
+   reachable with passwordless sudo, the service and symlinks as expected, the
+   running build healthy, and the broker's retained heartbeat readable.
+2. **Builds** for the Pi's architecture with `-X main.version=<commit>`.
+3. **Uploads** as `boiler-sensor-<timestamp>-<commit>`, checks the sha256, then
+   switches the `boiler-sensor-arm` symlink and restarts. The build it replaced
+   is recorded in `~/boiler-sensor/.previous`.
+4. **Verifies:** `/healthz` reports the new version with status `ok`, it stays
+   up, the journal has no fatal error, and the broker holds a `HEARTBEAT` from
+   the new run (what statehouse sees).
+5. **Rolls back on its own** if any of that fails, and checks the old build is
+   healthy again. Exit 1 means it rolled back; 3 means the rollback also failed.
+
+It keeps the three newest builds on the Pi. `./deploy_test.sh` tests the script.
 
 ### First-Time Pi Setup
 
-The first run of `deploy.sh` on a fresh Pi handles everything: creating system symlinks, adding the user to the `gpio` group, enabling the systemd service.
+`deploy.sh` expects a Pi that is already set up, and refuses otherwise. On a
+fresh Pi, after copying a build and `boiler-sensor.service` into
+`~/boiler-sensor/` and pointing `~/boiler-sensor/boiler-sensor-arm` at the build:
+link `/usr/local/bin/boiler-sensor` to that symlink and
+`/etc/systemd/system/boiler-sensor.service` to the unit file, add the user to
+the `gpio` group, then `systemctl daemon-reload` and `systemctl enable
+boiler-sensor`.
 
 **Prerequisites:**
 - Go 1.21+ on the dev machine
@@ -210,7 +216,8 @@ The first run of `deploy.sh` on a fresh Pi handles everything: creating system s
 
 | What            | Location                                   |
 |-----------------|--------------------------------------------|
-| Binary          | `~/boiler-sensor/boiler-sensor-<timestamp>`|
+| Binary          | `~/boiler-sensor/boiler-sensor-<timestamp>-<commit>`|
+| Rollback target | `~/boiler-sensor/.previous`                |
 | Active symlink  | `~/boiler-sensor/boiler-sensor-arm`        |
 | System symlink  | `/usr/local/bin/boiler-sensor`             |
 | Service file    | `~/boiler-sensor/boiler-sensor.service`    |
