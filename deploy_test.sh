@@ -157,7 +157,7 @@ fresh() {
     REPO="$WORK/case/repo"
     git init -q --bare "$WORK/case/origin.git"
     git init -q -b main "$REPO"
-    cp "$HERE/deploy.sh" "$HERE/boiler-sensor.service" "$REPO/"
+    cp "$HERE/deploy.sh" "$HERE/boiler-sensor.service" "$HERE/.gitignore" "$REPO/"
     mkdir -p "$REPO/cmd/boiler-sensor"
     echo 'package main' >"$REPO/cmd/boiler-sensor/main.go"
     echo 'module x' >"$REPO/go.mod"
@@ -223,6 +223,7 @@ check "deploy confirms the broker heartbeat" says 'broker holds a HEARTBEAT from
 check "deploy leaves no staging file" [ "$(count '.incoming-*')" -eq 0 ]
 check "deploy keeps 3 builds" [ "$(count 'boiler-sensor-2*')" -eq 3 ]
 check "deploy keeps the previous build" [ -f "$FAKE_HOME/boiler-sensor/$LEGACY" ]
+check "deploy leaves the checkout clean (bin/ is ignored)" [ -z "$(git -C "$REPO" status --porcelain)" ]
 check "unit file unchanged: no daemon-reload" [ "$(grep -c daemon-reload "$FAKE_STATE/log" || true)" -eq 0 ]
 first=$(link)
 
