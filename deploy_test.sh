@@ -44,6 +44,13 @@ cat >"$STUBS/rsync" <<'EOF'
 #!/usr/bin/env bash
 [ "${FAKE_RSYNC_FAIL:-0}" = 1 ] && exit 12
 src="${*: -2:1}" dest="${*: -1}"
+# FAKE_RSYNC_FAIL_ONCE=1: the first upload of a build fails.
+case "$dest" in *.incoming-*)
+    if [ "${FAKE_RSYNC_FAIL_ONCE:-0}" = 1 ] && [ ! -f "$FAKE_STATE/rsync_failed" ]; then
+        touch "$FAKE_STATE/rsync_failed"
+        exit 12
+    fi ;;
+esac
 cp "$src" "$FAKE_HOME/${dest#*:}"
 # FAKE_UNIT_RSYNC_FAIL=1: a unit file arrives, then rsync fails anyway.
 case "$dest" in *.service) [ "${FAKE_UNIT_RSYNC_FAIL:-0}" = 1 ] && exit 12 ;; esac
@@ -66,6 +73,7 @@ case "$1" in
                 *) shift ;;
             esac
         done
+        if [ "${FAKE_TINY_BUILD:-0}" = 1 ]; then echo "FAKEBIN version=$ver" >"$out"; exit 0; fi
         { echo "FAKEBIN version=$ver"; head -c 1100000 /dev/zero; } >"$out" ;;
 esac
 EOF
@@ -237,7 +245,9 @@ fresh() {
     REPO="$WORK/case/repo"
     git init -q --bare "$WORK/case/origin.git"
     git init -q -b main "$REPO"
+    mkdir -p "$REPO/deploy"
     cp "$HERE/deploy.sh" "$HERE/setup-pi.sh" "$HERE/boiler-sensor.service" "$HERE/.gitignore" "$REPO/"
+    cp "$HERE/deploy/lib.sh" "$REPO/deploy/"
     mkdir -p "$REPO/cmd/boiler-sensor"
     echo 'package main' >"$REPO/cmd/boiler-sensor/main.go"
     echo 'module x' >"$REPO/go.mod"
@@ -518,14 +528,14 @@ check "an unreachable Pi is refused" rc_is 2
 
 fresh
 deploy FAKE_CORRUPT=1 -- --yes
-check "a corrupted upload is refused" says 'upload corrupted'
+check "a corrupted upload is refused" says 'upload arrived corrupted'
 check "and nothing is switched" link_is "$LEGACY"
 check "and the staged file is removed" [ "$(count '.incoming-*')" -eq 0 ]
 
 fresh
 deploy FAKE_SSH_DROP_AFTER_UPLOAD=once -- --yes
 check "a dropped link after the upload is refused (2, not ssh's 255)" rc_is 2
-check "it says what it was doing" says 'REFUSED: checking its sha256 failed on .* after the upload'
+check "it says what it was doing" says 'REFUSED: checking its sha256 failed on '
 check "nothing is switched after the drop" link_is "$LEGACY"
 check "the staged file is removed once the link is back" [ "$(count '.incoming-*')" -eq 0 ]
 check "and so is any half-installed build" [ "$(count 'boiler-sensor-2*')" -eq 3 ]
@@ -539,7 +549,7 @@ check "not 'lost'" eval '! says "REFUSED: lost"'
 fresh
 deploy FAKE_SSH_DROP_AFTER_UPLOAD=stay -- --yes
 check "a link that stays down after the upload is refused too" rc_is 2
-check "and that one says the link was lost" says 'REFUSED: lost .* after the upload, while checking its sha256'
+check "and that one says the link was lost" says 'REFUSED: lost .* while checking its sha256'
 check "the staged file cannot be removed then" [ "$(count '.incoming-*')" -eq 1 ]
 rm "$FAKE_STATE/ssh_down"
 sleep 1 # another build name, so another staging name
@@ -634,6 +644,26 @@ fresh
 deploy -- --rollback --yes
 check "--rollback with nothing recorded is refused" says 'nothing recorded'
 
+# ---------------------------------------------------------------- deploy/lib.sh
+
+# lib CODE: run CODE with deploy/lib.sh sourced; its output in OUT. CODE is
+# single-quoted on purpose (SC2016): it expands in there.
+lib() { OUT=$(bash -c "set -euo pipefail; source '$HERE/deploy/lib.sh'; $1" 2>&1) && RC=0 || RC=$?; }
+# shellcheck disable=SC2016
+lib 'goarch_for armv6l && echo "$GOARCH $GOARM"'
+check "lib: armv6l builds as arm 6" [ "$OUT" = "arm 6" ]
+# shellcheck disable=SC2016
+lib 'goarch_for aarch64 && echo "$GOARCH [$GOARM]"'
+check "lib: aarch64 builds as arm64" [ "$OUT" = "arm64 []" ]
+lib 'goarch_for x86_64'
+check "lib: x86_64 is not built for" rc_is 1
+lib "jget status.mqtt.connected <<<'{\"status\":{\"mqtt\":{\"connected\":true}}}'"
+check "lib: jget reads a nested bool as true" [ "$OUT" = true ]
+lib "jget status.nope <<<'not json'"
+check "lib: jget is empty on junk" [ -z "$OUT" ]
+lib 'version_of boiler-sensor-20261030-124322-3c0d98c; echo; version_of boiler-sensor-20260323-163645'
+check "lib: version_of reads the stamp, empty for legacy builds" [ "$OUT" = "3c0d98c" ]
+
 # ---------------------------------------------------------------- setup-pi.sh
 
 bare
@@ -696,6 +726,19 @@ setup -- --yes
 check "setup refuses to build an unpushed commit" rc_is 2
 check "and says why" says 'not on any remote branch'
 check "having changed nothing" nothing_set_up
+
+for script in deploy setup; do
+    bare
+    [ $script = deploy ] && fresh
+    $script FAKE_RSYNC_FAIL_ONCE=1 -- --yes
+    check "$script retries a failed upload" rc_is 0
+    check "$script says it retried" says 'upload attempt 1 failed'
+    bare
+    [ $script = deploy ] && fresh
+    $script FAKE_TINY_BUILD=1 -- --yes
+    check "$script refuses a build too small to be real" rc_is 2
+    check "$script says how small" says 'the build is only'
+done
 
 bare
 setup FAKE_SUDO_PW=1 -- --yes

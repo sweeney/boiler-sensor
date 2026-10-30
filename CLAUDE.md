@@ -126,8 +126,8 @@ clean, pushed commit (the build is stamped with the hash and `/healthz` reports
 it, so settle commit dates before deploying), verifies `/healthz`, the journal
 and the broker heartbeat, and rolls back on its own if any check fails.
 `./deploy.sh --rollback` returns to the previous build. A fresh Pi is set up with
-`./setup-pi.sh` (`--check` first; idempotent). Change `deploy.sh` or
-`setup-pi.sh` only with a matching case in `deploy_test.sh`.
+`./setup-pi.sh` (`--check` first; idempotent). What the two share is in
+`deploy/lib.sh`. Change any of them only with a matching case in `deploy_test.sh`.
 
 ## Dependencies
 

@@ -48,13 +48,8 @@
 # Tests: ./deploy_test.sh (runs everything here against stubs).
 set -euo pipefail
 
-SERVICE=boiler-sensor
-PI_DIR=boiler-sensor # under the remote user's home
-LINK=boiler-sensor-arm # ~/boiler-sensor/<LINK> -> the running build
-BIN_LINK="${DEPLOY_BIN_LINK:-/usr/local/bin/boiler-sensor}"
 SYSTEM_TOPIC=energy/boiler/sensor/system
 KEEP=3
-VERIFY_TIMEOUT="${DEPLOY_VERIFY_TIMEOUT:-45}"
 SETTLE="${DEPLOY_SETTLE:-5}"
 
 usage() { sed -n '3,/^set -euo/{/^set -euo/d;s/^# \{0,1\}//p;}' "$0"; }
@@ -73,76 +68,15 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
-REMOTE="${REMOTE:-sweeney@pi0wh}"
-HTTP_HOST="${DEPLOY_HTTP_HOST:-${REMOTE#*@}}"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
+# shellcheck source-path=SCRIPTDIR source=deploy/lib.sh
+source deploy/lib.sh
 
-# A stalled transfer hangs rather than errors; ServerAlive turns a dead link
-# into an exit code. BatchMode stops ssh waiting for a password nobody types.
-SSHOPTS=(-o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o BatchMode=yes)
-
-say() { printf '==> %s\n' "$*"; }
-info() { printf '    %s\n' "$*"; }
-warn() { printf '    WARNING: %s\n' "$*" >&2; }
-refuse() { printf '\nREFUSED: %s\nNothing on %s was changed.\n' "$*" "$REMOTE" >&2; exit 2; }
 # would_refuse WHY: under --check, note what a deploy would refuse for and
 # carry on checking; --check fails at the end.
 PROBLEMS=()
 would_refuse() { warn "$1: a deploy would refuse"; PROBLEMS+=("$1"); }
-# -n: no remote command here reads stdin, and without it ssh would swallow
-# what the user types at the confirmation prompt.
-r() { ssh -n "${SSHOPTS[@]}" "$REMOTE" "$@"; }
-
-# jget KEY.PATH: read a field from the JSON on stdin; empty if absent.
-jget() {
-    python3 -c '
-import json, sys
-try:
-    d = json.load(sys.stdin)
-except ValueError:
-    d = None
-for k in sys.argv[1].split("."):
-    d = d.get(k) if isinstance(d, dict) else None
-print("" if d is None else str(d).lower() if isinstance(d, bool) else d)' "$1"
-}
-
-http() { curl -sS -f -m 5 "http://$HTTP_HOST$1" 2>/dev/null; }
-
-# version_of NAME: the commit a build file was stamped with, from its name
-# (boiler-sensor-YYYYMMDD-HHMMSS-<version>); empty for builds that predate
-# version stamping and so have no /healthz.
-version_of() {
-    local rest="${1#"$SERVICE"-}"
-    rest="${rest#????????-??????}"
-    printf '%s' "${rest#-}"
-}
-
-# wait_healthy VERSION: wait for the running build to answer healthily. With a
-# version, /healthz must report that version and status ok. Without one (a
-# pre-/healthz build) /index.json must report ready and MQTT connected.
-wait_healthy() {
-    local want="$1" deadline=$((SECONDS + VERIFY_TIMEOUT)) body
-    LAST_BODY=""
-    while [ $SECONDS -lt $deadline ]; do
-        if [ -n "$want" ]; then
-            if body=$(http /healthz); then
-                LAST_BODY="$body"
-                if [ "$(jget version <<<"$body")" = "$want" ] && [ "$(jget status <<<"$body")" = ok ]; then
-                    return 0
-                fi
-            fi
-        elif body=$(http /index.json); then
-            LAST_BODY="$body"
-            if [ "$(jget status.ready <<<"$body")" = true ] && [ "$(jget status.mqtt.connected <<<"$body")" = true ]; then
-                return 0
-            fi
-        fi
-        sleep 1
-    done
-    return 1
-}
-
 # retained_heartbeat: the broker's retained system message, or nothing.
 retained_heartbeat() {
     [ -n "${BROKER_HOST:-}" ] || return 1
@@ -196,21 +130,10 @@ rollback_to() {
     needs_person "ROLLBACK DID NOT COME UP HEALTHY"
 }
 
-confirm() {
-    [ "$YES" -eq 1 ] && return 0
-    local reply
-    printf '\n%s [y/N] ' "$1"
-    read -r reply || reply=""
-    case "$reply" in y | Y | yes) return 0 ;; esac
-    refuse "declined"
-}
-
 # --------------------------------------------------------------------------
 # Pre-flight. Everything here is read-only, locally and on the Pi.
 
-for cmd in git go ssh rsync curl python3 shasum; do
-    command -v "$cmd" >/dev/null || refuse "$cmd not found"
-done
+require_tools
 
 say "checking $REMOTE"
 remote_facts=$(r "uname -m
@@ -233,12 +156,7 @@ ls -1t ~/$PI_DIR | grep '^$SERVICE-2' || true") || refuse "cannot ssh to $REMOTE
     builds=$(cat)
 } <<<"$remote_facts"
 
-case "$remote_arch" in
-    armv6l) GOARCH=arm GOARM=6 ;;
-    armv7l) GOARCH=arm GOARM=7 ;;
-    aarch64 | arm64) GOARCH=arm64 GOARM="" ;;
-    *) refuse "$REMOTE is '$remote_arch', which this script does not build for" ;;
-esac
+goarch_for "$remote_arch" || refuse "$REMOTE is '$remote_arch', which this script does not build for"
 info "arch $remote_arch, service $active"
 [ "$sudo_ok" = sudo-ok ] || refuse "sudo on $REMOTE needs a password; this script cannot type it"
 [ "$CURRENT" != MISSING ] || refuse "\$HOME/$PI_DIR/$LINK is missing: this host was never set up (run ./setup-pi.sh)"
@@ -319,7 +237,7 @@ say "checking the commit"
 VERSION=$(git rev-parse --short=7 HEAD)
 branch=$(git rev-parse --abbrev-ref HEAD)
 info "$branch at $VERSION: $(git log -1 --format='%s (%ad)' --date=iso)"
-if ! git diff --quiet HEAD -- || [ -n "$(git ls-files --others --exclude-standard -- cmd internal go.mod go.sum)" ]; then
+if commit_dirty; then
     if [ "$ALLOW_DIRTY" -eq 1 ]; then
         VERSION="$VERSION-dirty"
         warn "uncommitted changes: deploying as $VERSION"
@@ -329,16 +247,15 @@ if ! git diff --quiet HEAD -- || [ -n "$(git ls-files --others --exclude-standar
         refuse "uncommitted changes. The version is the commit, so commit first (or --allow-dirty)"
     fi
 fi
-# Rewriting a commit's date changes its hash, and the build names its hash in
-# /healthz. Deploying only what is on GitHub means the dates are settled.
-# Fetch first: a stale origin/main still holds a hash force-pushed away.
-if ! git fetch --quiet --all --prune 2>/dev/null; then
+pushed=0
+commit_pushed || pushed=$?
+if [ $pushed -eq 2 ]; then
     if [ "$CHECK" -eq 1 ]; then
         would_refuse "cannot fetch from the remote to see that $VERSION is pushed"
     else
         refuse "cannot fetch from the remote, so cannot tell that $VERSION is still pushed"
     fi
-elif [ -z "$(git branch -r --contains HEAD 2>/dev/null)" ]; then
+elif [ $pushed -ne 0 ]; then
     if [ "$CHECK" -eq 1 ]; then
         would_refuse "$VERSION is not pushed"
     else
@@ -346,10 +263,7 @@ elif [ -z "$(git branch -r --contains HEAD 2>/dev/null)" ]; then
     fi
 fi
 
-say "go vet and go test"
-go vet ./... || refuse "go vet failed"
-go test -count=1 ./... >/dev/null || refuse "go test failed (run it to see why)"
-info "pass"
+vet_and_test
 
 if [ "$CHECK" -eq 1 ]; then
     echo
@@ -368,47 +282,25 @@ fi
 # --------------------------------------------------------------------------
 # Build and upload. Nothing that runs changes until the confirmation.
 
-say "building $VERSION"
-mkdir -p bin
-LOCAL_BIN="bin/$SERVICE-$remote_arch"
-GOOS=linux GOARCH=$GOARCH GOARM=$GOARM CGO_ENABLED=0 go build -trimpath \
-    -ldflags "-s -w -X main.version=$VERSION" -o "$LOCAL_BIN" ./cmd/$SERVICE
-size=$(wc -c <"$LOCAL_BIN" | tr -d ' ')
-[ "$size" -gt 1000000 ] || refuse "the build is only $size bytes"
-info "$LOCAL_BIN, $size bytes"
+build_for "$VERSION" "$remote_arch"
 
 NEW="$SERVICE-$(date +%Y%m%d-%H%M%S)-$VERSION"
 confirm "Upload $NEW to $REMOTE, switch $SERVICE to it from $CURRENT and restart?"
 
-say "uploading $NEW"
 STAGE=".incoming-$NEW"
 cleanup_stage() { r "rm -f ~/$PI_DIR/$STAGE ~/$PI_DIR/$NEW ~/$PI_DIR/$UNITS/$NEW.service" 2>/dev/null || true; }
-# step_failed STEP: a step after the upload failed, before anything that runs
-# changed. Say whether the link dropped or the step itself failed (a full
-# disk, say), and tidy up if the link is there; a later deploy removes what
-# this can't.
+# step_failed STEP: a step after the build, before anything that runs
+# changed, failed. Say whether the link dropped or the step itself failed (a
+# full disk, say), and tidy up if the link is there; a later deploy removes
+# what this can't.
 step_failed() {
     if r true 2>/dev/null; then
         cleanup_stage
-        refuse "$1 failed on $REMOTE after the upload"
+        refuse "$1 failed on $REMOTE"
     fi
-    refuse "lost $REMOTE after the upload, while $1"
+    refuse "lost $REMOTE while $1"
 }
-uploaded=0
-for attempt in 1 2 3; do
-    if rsync -z --partial --timeout=45 -e "ssh ${SSHOPTS[*]}" "$LOCAL_BIN" "$REMOTE:$PI_DIR/$STAGE"; then
-        uploaded=1
-        break
-    fi
-    warn "upload attempt $attempt failed"
-    sleep 2
-done
-[ $uploaded -eq 1 ] || { cleanup_stage; refuse "upload failed three times"; }
-local_sum=$(shasum -a 256 "$LOCAL_BIN" | cut -d' ' -f1)
-remote_sum=$(r "sha256sum ~/$PI_DIR/$STAGE" | cut -d' ' -f1) || step_failed "checking its sha256"
-[ "$local_sum" = "$remote_sum" ] || { cleanup_stage; refuse "upload corrupted: sha256 $remote_sum, expected $local_sum"; }
-r "chmod 0755 ~/$PI_DIR/$STAGE && mv ~/$PI_DIR/$STAGE ~/$PI_DIR/$NEW" || step_failed "moving it into place"
-info "sha256 verified"
+upload_build "$NEW" step_failed
 since=$(r "date +%s") || step_failed "reading its clock"
 
 # The unit file the running build runs under (if any: an old layout may have
