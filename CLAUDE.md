@@ -116,7 +116,8 @@ transitions) is covered by the `common/iot` suite. This repo keeps
   literals were captured from that build: never edit them to make a test pass.
 - `cmd/boiler-sensor/main_test.go` — `boilerProfile()` and `--ws-broker`.
 - `internal/web` — status page, `/index.json` and `/healthz`.
-- `deploy_test.sh` — `deploy.sh` against stubs (refusals, rollback paths).
+- `deploy_test.sh` — `deploy.sh` and `setup-pi.sh` against stubs (refusals,
+  rollback paths, idempotent setup).
 
 ## Deploying
 
@@ -124,8 +125,9 @@ transitions) is covered by the `common/iot` suite. This repo keeps
 clean, pushed commit (the build is stamped with the hash and `/healthz` reports
 it, so settle commit dates before deploying), verifies `/healthz`, the journal
 and the broker heartbeat, and rolls back on its own if any check fails.
-`./deploy.sh --rollback` returns to the previous build. Change `deploy.sh` only
-with a matching case in `deploy_test.sh`.
+`./deploy.sh --rollback` returns to the previous build. A fresh Pi is set up with
+`./setup-pi.sh` (`--check` first; idempotent). What the two share is in
+`deploy/lib.sh`. Change any of them only with a matching case in `deploy_test.sh`.
 
 ## Dependencies
 

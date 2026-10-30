@@ -4,6 +4,8 @@
 /boiler-sensor
 /boiler-sensor-arm
 *.exe
+# deploy.sh builds here
+/bin/
 
 # Local multi-module workspace (points at ../common/iot during development)
 go.work

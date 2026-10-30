@@ -172,10 +172,12 @@ GitHub Actions runs on every push to `main` and on pull requests:
 ## Deployment
 
 ```bash
-./deploy.sh --check      # read-only: every pre-flight check, changes nothing
+./deploy.sh --check      # read-only: every pre-flight check (exit 2 if a deploy would refuse)
 ./deploy.sh              # deploy to sweeney@pi0wh, asking before changing anything
 ./deploy.sh --yes        # without asking
+./deploy.sh --allow-unhealthy   # deploy a fix over a running build that is not healthy
 ./deploy.sh --rollback   # back to the build that ran before the last deploy
+./deploy.sh --check --rollback   # read-only: what --rollback would do
 ./deploy.sh user@host    # a different Pi
 ```
 
@@ -188,7 +190,9 @@ A deploy:
 2. **Builds** for the Pi's architecture with `-X main.version=<commit>`.
 3. **Uploads** as `boiler-sensor-<timestamp>-<commit>`, checks the sha256, then
    switches the `boiler-sensor-arm` symlink and restarts. The build it replaced
-   is recorded in `~/boiler-sensor/.previous`.
+   is recorded in `~/boiler-sensor/.previous`. Each build's unit file is kept
+   with it in `~/boiler-sensor/.units/`, and a switch to a build, forward or
+   back, installs its unit first if it differs.
 4. **Verifies:** `/healthz` reports the new version with status `ok`, it stays
    up, the journal has no fatal error, and the broker holds a `HEARTBEAT` from
    the new run (what statehouse sees).
@@ -199,13 +203,22 @@ It keeps the three newest builds on the Pi. `./deploy_test.sh` tests the script.
 
 ### First-Time Pi Setup
 
-`deploy.sh` expects a Pi that is already set up, and refuses otherwise. On a
-fresh Pi, after copying a build and `boiler-sensor.service` into
-`~/boiler-sensor/` and pointing `~/boiler-sensor/boiler-sensor-arm` at the build:
-link `/usr/local/bin/boiler-sensor` to that symlink and
-`/etc/systemd/system/boiler-sensor.service` to the unit file, add the user to
-the `gpio` group, then `systemctl daemon-reload` and `systemctl enable
-boiler-sensor`.
+`deploy.sh` expects a Pi that is already set up, and refuses otherwise.
+`setup-pi.sh` sets one up:
+
+```bash
+./setup-pi.sh --check    # read-only: what setup would do
+./setup-pi.sh            # set up sweeney@pi0wh, asking first (--yes to skip)
+./setup-pi.sh user@host  # a different Pi
+```
+
+It creates `~/boiler-sensor` with the unit file, builds and uploads a first
+build of this commit if none is linked, links `/usr/local/bin/boiler-sensor`
+and `/etc/systemd/system/boiler-sensor.service`, adds the user to `gpio`,
+reloads systemd, enables and starts the service, and waits for it to report
+ready. Each step runs only if needed, so it is safe to re-run; on a Pi that
+is set up it does nothing. It refuses, rather than overwrites, anything else
+at those paths. `./deploy_test.sh` tests it too.
 
 **Prerequisites:**
 - Go 1.21+ on the dev machine
@@ -218,6 +231,7 @@ boiler-sensor`.
 |-----------------|--------------------------------------------|
 | Binary          | `~/boiler-sensor/boiler-sensor-<timestamp>-<commit>`|
 | Rollback target | `~/boiler-sensor/.previous`                |
+| Unit per build  | `~/boiler-sensor/.units/<build>.service`   |
 | Active symlink  | `~/boiler-sensor/boiler-sensor-arm`        |
 | System symlink  | `/usr/local/bin/boiler-sensor`             |
 | Service file    | `~/boiler-sensor/boiler-sensor.service`    |
