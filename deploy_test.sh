@@ -168,6 +168,21 @@ fresh() {
     VERSION=$(git -C "$REPO" rev-parse --short=7 HEAD)
 }
 
+# path_without TOOL: a PATH (stubs first) with every command but TOOL.
+path_without() {
+    local dir="$WORK/path-without-$1" d f
+    if [ ! -d "$dir" ]; then
+        mkdir -p "$dir"
+        for d in "$STUBS" ${PATH//:/ }; do
+            [ -d "$d" ] || continue
+            for f in "$d"/*; do
+                [ -x "$f" ] && [ "${f##*/}" != "$1" ] && [ ! -e "$dir/${f##*/}" ] && ln -s "$f" "$dir/${f##*/}"
+            done
+        done
+    fi
+    echo "$dir"
+}
+
 pass=0 fail=0
 OUT="" RC=0
 
@@ -282,6 +297,14 @@ fresh
 deploy FAKE_TEST_RC=1 -- --yes
 check "failing tests are refused" rc_is 2
 check "before anything is uploaded" [ "$(count '*')" -eq 5 ]
+
+for tool in rsync shasum; do
+    fresh
+    deploy PATH="$(path_without $tool)" -- --yes
+    check "a missing $tool is refused" rc_is 2
+    check "by name, before anything is uploaded" says "$tool not found"
+    check "leaving the Pi untouched" [ "$(count '*')" -eq 5 ]
+done
 
 fresh
 deploy FAKE_ARCH=x86_64 -- --yes

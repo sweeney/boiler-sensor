@@ -166,7 +166,7 @@ confirm() {
 # --------------------------------------------------------------------------
 # Pre-flight. Everything here is read-only, locally and on the Pi.
 
-for cmd in git go ssh curl python3; do
+for cmd in git go ssh rsync curl python3 shasum; do
     command -v "$cmd" >/dev/null || refuse "$cmd not found"
 done
 
