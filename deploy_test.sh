@@ -721,6 +721,15 @@ check "and is left alone" [ "$(pi_link "$WORK/case/bin/boiler-sensor")" = /opt/o
 check "nothing else is done" [ ! -e "$FAKE_HOME/boiler-sensor" ]
 
 bare
+# An older layout: the binary copied straight to boiler-sensor-arm.
+mkdir -p "$FAKE_HOME/boiler-sensor"
+echo "OLD LAYOUT BINARY" >"$FAKE_HOME/boiler-sensor/boiler-sensor-arm"
+setup -- --yes
+check "a real file at boiler-sensor-arm is refused" rc_is 2
+check "it says it is not a symlink" says 'boiler-sensor-arm on .* is not a symlink'
+check "and the file is left as it was" [ "$(cat "$FAKE_HOME/boiler-sensor/boiler-sensor-arm")" = "OLD LAYOUT BINARY" ]
+
+bare
 git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m unpushed
 setup -- --yes
 check "setup refuses to build an unpushed commit" rc_is 2

@@ -18,7 +18,8 @@
 #      ~/boiler-sensor/boiler-sensor-arm pointed at it.
 #   3. /usr/local/bin/boiler-sensor -> ~/boiler-sensor/boiler-sensor-arm and
 #      /etc/systemd/system/boiler-sensor.service -> the unit file. Anything
-#      else already at either path is refused, not overwritten.
+#      else already at these paths, or at ~/boiler-sensor/boiler-sensor-arm, is
+#      refused, not overwritten.
 #   4. The user in the gpio group, systemd reloaded, the service enabled and
 #      started, and the build answering healthily.
 #
@@ -64,7 +65,7 @@ echo \$HOME
 whoami
 sudo -n true 2>/dev/null && echo sudo-ok || echo sudo-no
 [ -f ~/$PI_DIR/$SERVICE.service ] && echo yes || echo no
-readlink ~/$PI_DIR/$LINK || echo MISSING
+$(link_or "\$HOME/$PI_DIR/$LINK")
 $(link_or "$BIN_LINK")
 $(link_or "$UNIT_LINK")
 id -nG | tr ' ' '\n' | grep -qx gpio && echo yes || echo no
@@ -86,6 +87,7 @@ systemctl is-active $SERVICE || true") || refuse "cannot ssh to $REMOTE"
 
 goarch_for "$remote_arch" || refuse "$REMOTE is '$remote_arch', which this script does not build for"
 [ "$sudo_ok" = sudo-ok ] || refuse "sudo on $REMOTE needs a password; this script cannot type it"
+[ "$build" != ELSE ] || refuse "\$HOME/$PI_DIR/$LINK on $REMOTE is not a symlink (an older layout?); move it aside first"
 
 want_bin="$pi_home/$PI_DIR/$LINK"
 want_unit="$pi_home/$PI_DIR/$SERVICE.service"
@@ -148,7 +150,7 @@ fi
 if [ "$build" = MISSING ]; then
     build="$SERVICE-$(date +%Y%m%d-%H%M%S)-$VERSION"
     upload_build "$build" upload_failed
-    r "cd ~/$PI_DIR && ln -sfn $build $LINK" || stopped "cannot link ~/$PI_DIR/$LINK to $build"
+    r "cd ~/$PI_DIR && ln -sn $build $LINK" || stopped "cannot link ~/$PI_DIR/$LINK to $build"
     info "linked ~/$PI_DIR/$LINK -> $build"
 fi
 
