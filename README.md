@@ -201,13 +201,22 @@ It keeps the three newest builds on the Pi. `./deploy_test.sh` tests the script.
 
 ### First-Time Pi Setup
 
-`deploy.sh` expects a Pi that is already set up, and refuses otherwise. On a
-fresh Pi, after copying a build and `boiler-sensor.service` into
-`~/boiler-sensor/` and pointing `~/boiler-sensor/boiler-sensor-arm` at the build:
-link `/usr/local/bin/boiler-sensor` to that symlink and
-`/etc/systemd/system/boiler-sensor.service` to the unit file, add the user to
-the `gpio` group, then `systemctl daemon-reload` and `systemctl enable
-boiler-sensor`.
+`deploy.sh` expects a Pi that is already set up, and refuses otherwise.
+`setup-pi.sh` sets one up:
+
+```bash
+./setup-pi.sh --check    # read-only: what setup would do
+./setup-pi.sh            # set up sweeney@pi0wh, asking first (--yes to skip)
+./setup-pi.sh user@host  # a different Pi
+```
+
+It creates `~/boiler-sensor` with the unit file, builds and uploads a first
+build of this commit if none is linked, links `/usr/local/bin/boiler-sensor`
+and `/etc/systemd/system/boiler-sensor.service`, adds the user to `gpio`,
+reloads systemd, enables and starts the service, and waits for it to report
+ready. Each step runs only if needed, so it is safe to re-run; on a Pi that
+is set up it does nothing. It refuses, rather than overwrites, anything else
+at those paths. `./deploy_test.sh` tests it too.
 
 **Prerequisites:**
 - Go 1.21+ on the dev machine

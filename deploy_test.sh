@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Tests for deploy.sh. Each case runs the real script in a throwaway git repo
-# against stubs: ssh runs the "remote" commands locally with HOME pointed at a
-# fake Pi home, and curl, mosquitto_sub, rsync, go, systemctl, journalctl and
-# sudo are scripted from that fake Pi's state. No network, no Pi.
+# Tests for deploy.sh and setup-pi.sh. Each case runs the real script in a
+# throwaway git repo against stubs: ssh runs the "remote" commands locally with
+# HOME pointed at a fake Pi home, and curl, mosquitto_sub, rsync, go,
+# systemctl, journalctl, sudo, id and usermod are scripted from that fake Pi's
+# state. No network, no Pi.
 #
 # Usage: ./deploy_test.sh
 set -euo pipefail
@@ -118,7 +119,9 @@ cat >"$RSTUBS/systemctl" <<'EOF'
 #!/usr/bin/env bash
 echo "systemctl $*" >>"$FAKE_STATE/log"
 case "$1" in
-    is-active) echo active ;;
+    is-active) cat "$FAKE_STATE/active" ;;
+    is-enabled) cat "$FAKE_STATE/enabled" ;;
+    enable) echo enabled >"$FAKE_STATE/enabled" ;;
     show) cat "$FAKE_STATE/invocation" ;; # show -p InvocationID --value
     daemon-reload)
         # FAKE_RELOAD_FAIL=1: the first daemon-reload fails.
@@ -126,7 +129,7 @@ case "$1" in
             touch "$FAKE_STATE/reload_failed"
             exit 1
         fi ;;
-    restart)
+    restart | start)
         target=$(basename "$(readlink "$HOME/boiler-sensor/boiler-sensor-arm")")
         # FAKE_RESTART_FAIL=GLOB: starting a build that matches fails.
         # shellcheck disable=SC2053 # a glob on purpose
@@ -139,6 +142,7 @@ case "$1" in
         old=$(cat "$FAKE_STATE/invocation")
         [ -n "${FAKE_OLD_STOP_LOG:-}" ] && printf '%s %s\n' "$old" "$FAKE_OLD_STOP_LOG" >>"$FAKE_STATE/journal"
         echo "$target" >"$FAKE_STATE/running"
+        echo active >"$FAKE_STATE/active"
         inv="inv$(wc -l <"$FAKE_STATE/log" | tr -d ' ')"
         echo "$inv" >"$FAKE_STATE/invocation"
         echo "$inv boiler-sensor $target starting" >>"$FAKE_STATE/journal"
@@ -165,6 +169,18 @@ done <"$FAKE_STATE/journal"
 true
 EOF
 
+cat >"$RSTUBS/id" <<'EOF'
+#!/usr/bin/env bash
+# id -nG
+if [ "$(cat "$FAKE_STATE/gpio")" = yes ]; then echo "pi adm gpio"; else echo "pi adm"; fi
+EOF
+
+cat >"$RSTUBS/usermod" <<'EOF'
+#!/usr/bin/env bash
+echo "usermod $*" >>"$FAKE_STATE/log"
+[ "$1 $2" = "-aG gpio" ] && echo yes >"$FAKE_STATE/gpio"
+EOF
+
 cat >"$RSTUBS/uname" <<'EOF'
 #!/usr/bin/env bash
 echo "${FAKE_ARCH:-armv6l}"
@@ -184,7 +200,7 @@ LEGACY=boiler-sensor-20260323-163645
 # fresh: a new fake Pi running the legacy build, and a clean pushed checkout.
 fresh() {
     rm -rf "$WORK/case"
-    mkdir -p "$WORK/case"/{home/boiler-sensor,state,bin}
+    mkdir -p "$WORK/case"/{home/boiler-sensor,state,bin,etc}
     FAKE_HOME="$WORK/case/home" FAKE_STATE="$WORK/case/state"
     local pi="$FAKE_HOME/boiler-sensor"
     for b in boiler-sensor-20260309-115805 boiler-sensor-20260320-093441 "$LEGACY"; do
@@ -194,6 +210,10 @@ fresh() {
     ln -s "$LEGACY" "$pi/boiler-sensor-arm"
     cp "$HERE/boiler-sensor.service" "$pi/boiler-sensor.service"
     ln -s "$pi/boiler-sensor-arm" "$WORK/case/bin/boiler-sensor"
+    ln -s "$pi/boiler-sensor.service" "$WORK/case/etc/boiler-sensor.service"
+    echo active >"$FAKE_STATE/active"
+    echo enabled >"$FAKE_STATE/enabled"
+    echo yes >"$FAKE_STATE/gpio"
     echo "$LEGACY" >"$FAKE_STATE/running"
     echo 2026-07-07T06:14:53Z >"$FAKE_STATE/started"
     echo OFF >"$FAKE_STATE/ch"
@@ -205,7 +225,7 @@ fresh() {
     REPO="$WORK/case/repo"
     git init -q --bare "$WORK/case/origin.git"
     git init -q -b main "$REPO"
-    cp "$HERE/deploy.sh" "$HERE/boiler-sensor.service" "$HERE/.gitignore" "$REPO/"
+    cp "$HERE/deploy.sh" "$HERE/setup-pi.sh" "$HERE/boiler-sensor.service" "$HERE/.gitignore" "$REPO/"
     mkdir -p "$REPO/cmd/boiler-sensor"
     echo 'package main' >"$REPO/cmd/boiler-sensor/main.go"
     echo 'module x' >"$REPO/go.mod"
@@ -231,24 +251,39 @@ path_without() {
     echo "$dir"
 }
 
+# bare: a fresh Pi with nothing of boiler-sensor on it, and the same checkout.
+bare() {
+    fresh
+    rm -rf "$FAKE_HOME/boiler-sensor" "$WORK/case/bin/boiler-sensor" "$WORK/case/etc/boiler-sensor.service"
+    echo DOWN >"$FAKE_STATE/running"
+    echo inactive >"$FAKE_STATE/active"
+    echo not-found >"$FAKE_STATE/enabled"
+    echo no >"$FAKE_STATE/gpio"
+}
+
 pass=0 fail=0
 OUT="" RC=0
 
-# deploy [VAR=value...] -- [deploy.sh args...]; stdin is passed through.
-deploy() {
-    local envs=()
+# run SCRIPT [VAR=value...] -- [args...]; stdin is passed through.
+run() {
+    local script="$1" envs=()
+    shift
     while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
     [ $# -gt 0 ] && shift
     OUT=$(env PATH="$STUBS:$PATH" RSTUBS="$RSTUBS" FAKE_HOME="$FAKE_HOME" FAKE_STATE="$FAKE_STATE" \
-        DEPLOY_BIN_LINK="$WORK/case/bin/boiler-sensor" DEPLOY_HTTP_HOST=pi.test \
-        DEPLOY_VERIFY_TIMEOUT=3 DEPLOY_SETTLE=0 ${envs[@]+"${envs[@]}"} \
-        "$REPO/deploy.sh" "$@" 2>&1) && RC=0 || RC=$?
+        DEPLOY_BIN_LINK="$WORK/case/bin/boiler-sensor" DEPLOY_UNIT_LINK="$WORK/case/etc/boiler-sensor.service" \
+        DEPLOY_HTTP_HOST=pi.test DEPLOY_VERIFY_TIMEOUT=3 DEPLOY_SETTLE=0 ${envs[@]+"${envs[@]}"} \
+        "$REPO/$script" "$@" 2>&1) && RC=0 || RC=$?
 }
+deploy() { run deploy.sh "$@"; }
+setup() { run setup-pi.sh "$@"; }
 
 # count GLOB: how many entries in the fake Pi's ~/boiler-sensor match.
 count() { find "$FAKE_HOME/boiler-sensor" -mindepth 1 -maxdepth 1 -name "$1" | wc -l | tr -d ' '; }
 link() { readlink "$FAKE_HOME/boiler-sensor/boiler-sensor-arm"; }
 restarts() { grep -c 'systemctl restart' "$FAKE_STATE/log" || true; }
+# changes: how many systemctl/usermod calls changed something on the fake Pi.
+changes() { grep -cvE 'systemctl (is-active|is-enabled|show)' "$FAKE_STATE/log" || true; }
 reloads() { grep -c 'systemctl daemon-reload' "$FAKE_STATE/log" || true; }
 unit_is() { cmp -s "$FAKE_HOME/boiler-sensor/boiler-sensor.service" "$1"; }
 # change_unit: commit and push a change to the unit file.
@@ -257,6 +292,13 @@ change_unit() {
     git -C "$REPO" -c user.name=t -c user.email=t@t commit -qam unit
     git -C "$REPO" push -q origin main
     VERSION=$(git -C "$REPO" rev-parse --short=7 HEAD)
+}
+
+# pi_link PATH: where a symlink on the fake Pi points, or MISSING.
+pi_link() { readlink "$1" || echo MISSING; }
+nothing_set_up() {
+    [ ! -e "$FAKE_HOME/boiler-sensor" ] && [ "$(pi_link "$WORK/case/bin/boiler-sensor")" = MISSING ] &&
+        [ "$(pi_link "$WORK/case/etc/boiler-sensor.service")" = MISSING ] && [ "$(cat "$FAKE_STATE/enabled")" = not-found ]
 }
 
 check() { # check NAME CONDITION...
@@ -516,6 +558,90 @@ done
 fresh
 deploy -- --rollback --yes
 check "--rollback with nothing recorded is refused" says 'nothing recorded'
+
+# ---------------------------------------------------------------- setup-pi.sh
+
+bare
+deploy -- --check
+check "deploy on a bare Pi is refused" rc_is 2
+check "and points at setup-pi.sh" says 'setup-pi.sh'
+
+bare
+setup -- --check
+check "setup --check on a bare Pi passes" rc_is 0
+check "it lists what it would do" says 'Setup would'
+check "and that includes a first build" says "build $VERSION"
+check "setup --check changes nothing" nothing_set_up
+
+bare
+setup -- --yes
+check "setup --yes on a bare Pi succeeds" rc_is 0
+check "it links a first build, named by commit" new_build_is_running
+check "it installs the unit file" unit_is "$HERE/boiler-sensor.service"
+check "it links /usr/local/bin" [ "$(pi_link "$WORK/case/bin/boiler-sensor")" = "$FAKE_HOME/boiler-sensor/boiler-sensor-arm" ]
+check "it links the systemd unit" [ "$(pi_link "$WORK/case/etc/boiler-sensor.service")" = "$FAKE_HOME/boiler-sensor/boiler-sensor.service" ]
+check "it adds the user to gpio" [ "$(cat "$FAKE_STATE/gpio")" = yes ]
+check "it enables the service" [ "$(cat "$FAKE_STATE/enabled")" = enabled ]
+check "it reloads systemd" [ "$(reloads)" -eq 1 ]
+check "it leaves no staging file" [ "$(count '.incoming-*')" -eq 0 ]
+check "it checks the service came up" says 'is running on'
+before=$(changes)
+setup -- --yes
+check "setup again succeeds" rc_is 0
+check "and has nothing to do" says 'already set up'
+check "and changes nothing on the Pi" [ "$(changes)" -eq "$before" ]
+deploy -- --check
+check "deploy --check passes on a Pi setup made" rc_is 0
+
+fresh
+setup -- --check
+check "setup --check on a set-up Pi has nothing to do" says 'already set up'
+
+fresh
+# Set up by hand once: a build linked, the rest not.
+rm "$WORK/case/bin/boiler-sensor" "$WORK/case/etc/boiler-sensor.service"
+echo inactive >"$FAKE_STATE/active"
+echo DOWN >"$FAKE_STATE/running"
+setup -- --yes
+check "setup finishes a half-set-up Pi" rc_is 0
+check "without building: the existing build is kept" link_is "$LEGACY"
+check "and starts it" [ "$(cat "$FAKE_STATE/running")" = "$LEGACY" ]
+
+bare
+mkdir -p "$WORK/case/bin" && ln -s /opt/other/boiler-sensor "$WORK/case/bin/boiler-sensor"
+setup -- --yes
+check "a /usr/local/bin entry pointing elsewhere is refused" rc_is 2
+check "it names it" says '/opt/other/boiler-sensor'
+check "and is left alone" [ "$(pi_link "$WORK/case/bin/boiler-sensor")" = /opt/other/boiler-sensor ]
+check "nothing else is done" [ ! -e "$FAKE_HOME/boiler-sensor" ]
+
+bare
+git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m unpushed
+setup -- --yes
+check "setup refuses to build an unpushed commit" rc_is 2
+check "and says why" says 'not on any remote branch'
+check "having changed nothing" nothing_set_up
+
+bare
+setup FAKE_SUDO_PW=1 -- --yes
+check "setup refuses without passwordless sudo" rc_is 2
+
+bare
+OUT=$(echo n | env PATH="$STUBS:$PATH" RSTUBS="$RSTUBS" FAKE_HOME="$FAKE_HOME" FAKE_STATE="$FAKE_STATE" \
+    DEPLOY_BIN_LINK="$WORK/case/bin/boiler-sensor" DEPLOY_UNIT_LINK="$WORK/case/etc/boiler-sensor.service" \
+    DEPLOY_HTTP_HOST=pi.test "$REPO/setup-pi.sh" 2>&1) && RC=0 || RC=$?
+check "answering no declines setup" rc_is 2
+check "a declined setup changes nothing" nothing_set_up
+
+bare
+setup FAKE_MQTT_DOWN=1 -- --yes
+check "setup whose service does not come up healthy exits 1" rc_is 1
+check "and says so" says 'did not come up healthy'
+
+bare
+setup FAKE_RESTART_FAIL="*" -- --yes
+check "a setup step that fails exits 3" rc_is 3
+check "and says to re-run" says 're-run'
 
 fresh
 deploy -- --bogus

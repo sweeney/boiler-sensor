@@ -212,7 +212,7 @@ case "$remote_arch" in
 esac
 info "arch $remote_arch, service $active"
 [ "$sudo_ok" = sudo-ok ] || refuse "sudo on $REMOTE needs a password; this script cannot type it"
-[ "$CURRENT" != MISSING ] || refuse "\$HOME/$PI_DIR/$LINK is missing: this host was never set up (see README)"
+[ "$CURRENT" != MISSING ] || refuse "\$HOME/$PI_DIR/$LINK is missing: this host was never set up (run ./setup-pi.sh)"
 [ "$bin_link" = "${bin_link%"/$PI_DIR/$LINK"}/$PI_DIR/$LINK" ] ||
     refuse "$BIN_LINK points at '$bin_link', not ~/$PI_DIR/$LINK; switching that link would not change what runs"
 [ "${free_kb:-0}" -gt 51200 ] || refuse "less than 50MB free in the home directory on $REMOTE"
