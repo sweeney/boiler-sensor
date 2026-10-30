@@ -294,6 +294,23 @@ check "an unpushed commit is refused" rc_is 2
 check "it says to push" says 'not on any remote branch'
 
 fresh
+# Elsewhere the commit's date is rewritten and force-pushed; this checkout's
+# origin/main still names the old hash.
+git clone -q "$WORK/case/origin.git" "$WORK/case/other"
+GIT_COMMITTER_DATE="2026-10-29T09:00:00Z" git -C "$WORK/case/other" -c user.name=t -c user.email=t@t \
+    commit -q --amend --no-edit --date=2026-10-29T09:00:00Z
+git -C "$WORK/case/other" push -q -f origin main
+deploy -- --yes
+check "a commit force-pushed away is refused, though origin/main is stale" rc_is 2
+check "it says the commit is not on the remote" says 'not on any remote branch'
+
+fresh
+git -C "$REPO" remote set-url origin "$WORK/case/nowhere.git"
+deploy -- --yes
+check "a remote that cannot be fetched is refused" rc_is 2
+check "it says so" says 'cannot fetch'
+
+fresh
 deploy FAKE_TEST_RC=1 -- --yes
 check "failing tests are refused" rc_is 2
 check "before anything is uploaded" [ "$(count '*')" -eq 5 ]

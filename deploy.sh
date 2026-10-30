@@ -11,8 +11,9 @@
 #   ./deploy.sh [opts] user@host another Pi
 #
 # What a deploy does:
-#   1. Pre-flight, all read-only: a clean, pushed commit (the version is the
-#      commit hash, so it must exist on GitHub and its date must be final),
+#   1. Pre-flight, all read-only (apart from a `git fetch`): a clean, pushed
+#      commit (the version is the commit hash, so it must exist on GitHub, as
+#      fetched now, and its date must be final),
 #      `go vet` and `go test`, the Pi reachable with passwordless sudo, the
 #      service and its symlinks as expected, the current build healthy, and the
 #      broker's retained heartbeat readable from here.
@@ -270,7 +271,14 @@ if ! git diff --quiet HEAD -- || [ -n "$(git ls-files --others --exclude-standar
 fi
 # Rewriting a commit's date changes its hash, and the build names its hash in
 # /healthz. Deploying only what is on GitHub means the dates are settled.
-if [ -z "$(git branch -r --contains HEAD 2>/dev/null)" ]; then
+# Fetch first: a stale origin/main still holds a hash force-pushed away.
+if ! git fetch --quiet --all --prune 2>/dev/null; then
+    if [ "$CHECK" -eq 1 ]; then
+        warn "cannot fetch from the remote to see that $VERSION is pushed: a deploy would refuse"
+    else
+        refuse "cannot fetch from the remote, so cannot tell that $VERSION is still pushed"
+    fi
+elif [ -z "$(git branch -r --contains HEAD 2>/dev/null)" ]; then
     if [ "$CHECK" -eq 1 ]; then
         warn "$VERSION is not pushed: a deploy would refuse"
     else
