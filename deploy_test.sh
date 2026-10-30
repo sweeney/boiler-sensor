@@ -119,6 +119,12 @@ cat >"$RSTUBS/systemctl" <<'EOF'
 echo "systemctl $*" >>"$FAKE_STATE/log"
 case "$1" in
     is-active) echo active ;;
+    daemon-reload)
+        # FAKE_RELOAD_FAIL=1: the first daemon-reload fails.
+        if [ "${FAKE_RELOAD_FAIL:-0}" = 1 ] && [ ! -f "$FAKE_STATE/reload_failed" ]; then
+            touch "$FAKE_STATE/reload_failed"
+            exit 1
+        fi ;;
     restart)
         target=$(basename "$(readlink "$HOME/boiler-sensor/boiler-sensor-arm")")
         # FAKE_RESTART_FAIL=GLOB: starting a build that matches fails.
@@ -223,6 +229,15 @@ deploy() {
 count() { find "$FAKE_HOME/boiler-sensor" -mindepth 1 -maxdepth 1 -name "$1" | wc -l | tr -d ' '; }
 link() { readlink "$FAKE_HOME/boiler-sensor/boiler-sensor-arm"; }
 restarts() { grep -c 'systemctl restart' "$FAKE_STATE/log" || true; }
+reloads() { grep -c 'systemctl daemon-reload' "$FAKE_STATE/log" || true; }
+unit_is() { cmp -s "$FAKE_HOME/boiler-sensor/boiler-sensor.service" "$1"; }
+# change_unit: commit and push a change to the unit file.
+change_unit() {
+    echo "# changed" >>"$REPO/boiler-sensor.service"
+    git -C "$REPO" -c user.name=t -c user.email=t@t commit -qam unit
+    git -C "$REPO" push -q origin main
+    VERSION=$(git -C "$REPO" rev-parse --short=7 HEAD)
+}
 
 check() { # check NAME CONDITION...
     local name="$1"; shift
@@ -418,13 +433,38 @@ check "answering no at the prompt declines" rc_is 2
 check "a declined deploy uploads and changes nothing" [ "$(count '*')" -eq 5 ]
 
 fresh
-echo "# changed" >>"$REPO/boiler-sensor.service"
-git -C "$REPO" -c user.name=t -c user.email=t@t commit -qam unit
-git -C "$REPO" push -q origin main
-VERSION=$(git -C "$REPO" rev-parse --short=7 HEAD)
+change_unit
 deploy -- --yes
 check "a changed unit file is installed" says 'unit file changed'
-check "and systemd reloaded" [ "$(grep -c daemon-reload "$FAKE_STATE/log")" -eq 1 ]
+check "and systemd reloaded" [ "$(reloads)" -eq 1 ]
+check "the new unit is in place" unit_is "$REPO/boiler-sensor.service"
+deploy -- --rollback --yes
+check "--rollback puts the old unit file back" unit_is "$HERE/boiler-sensor.service"
+check "and reloads systemd" [ "$(reloads)" -eq 2 ]
+deploy -- --rollback --yes
+check "--rollback again brings the new unit back" unit_is "$REPO/boiler-sensor.service"
+check "--rollback again runs the new build" new_build_is_running
+
+fresh
+change_unit
+deploy FAKE_NEW_BROKEN=1 -- --yes
+check "a failed deploy with a new unit file is rolled back" rc_is 1
+check "the old unit file is back" unit_is "$HERE/boiler-sensor.service"
+check "and systemd reloaded with it" [ "$(reloads)" -eq 2 ]
+check "and the old build runs" [ "$(cat "$FAKE_STATE/running")" = "$LEGACY" ]
+
+fresh
+change_unit
+deploy FAKE_RELOAD_FAIL=1 -- --yes
+check "a daemon-reload that fails is rolled back" rc_is 1
+check "it says so" says 'daemon-reload failed'
+check "the old unit is back after the failed reload" unit_is "$HERE/boiler-sensor.service"
+check "the old build runs after the failed reload" link_is "$LEGACY"
+
+fresh
+deploy -- --yes
+deploy -- --rollback --yes
+check "--rollback with the unit unchanged does not reload systemd" [ "$(reloads)" -eq 0 ]
 
 fresh
 deploy -- --yes

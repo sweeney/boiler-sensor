@@ -20,12 +20,13 @@
 #   2. Build for the Pi's architecture, stamped with the commit.
 #   3. Upload under a new name, check the sha256, and only then switch the
 #      symlink and restart. The old build stays on disk, and its name is kept
-#      in ~/boiler-sensor/.previous for --rollback.
+#      in ~/boiler-sensor/.previous for --rollback, its unit file in
+#      .previous.service. A changed unit file is installed before the restart.
 #   4. Verify: /healthz answers with this version and status "ok" (baselined,
 #      MQTT connected), stays up, the journal shows no fatal error, and the
 #      broker holds a HEARTBEAT from this run (what statehouse sees).
-#   5. If any of 4 fails, switch back to the previous build, restart it and
-#      check it is healthy again.
+#   5. If any of 4 fails, switch back to the previous build and its unit file,
+#      restart it and check it is healthy again.
 #
 # A restart costs a few seconds without monitoring. The new process publishes
 # its state as a retained HEARTBEAT as soon as it has a baseline, so a
@@ -141,11 +142,21 @@ switch_to() {
     r "cd ~/$PI_DIR && ln -sfn '$1' $LINK && sudo systemctl restart $SERVICE"
 }
 
+# swap_units: put back the unit file that ran with the build in .previous,
+# keeping the one replaced there, so a rollback can itself be rolled back.
+# Builds deployed before .previous.service existed have nothing to swap.
+swap_units() {
+    r "cd ~/$PI_DIR && if [ -f .previous.service ] && ! cmp -s .previous.service $SERVICE.service; then
+        mv $SERVICE.service .swap.service && mv .previous.service $SERVICE.service &&
+        mv .swap.service .previous.service && sudo systemctl daemon-reload && echo '    unit file swapped back'
+    fi"
+}
+
 rollback_to() {
     local prev="$1"
     say "rolling back to $prev"
     LAST_BODY=""
-    if switch_to "$prev" && wait_healthy "$(version_of "$prev")"; then
+    if swap_units && switch_to "$prev" && wait_healthy "$(version_of "$prev")"; then
         info "$prev is running and healthy again"
         return 0
     fi
@@ -348,20 +359,24 @@ r "chmod 0755 ~/$PI_DIR/$STAGE && mv ~/$PI_DIR/$STAGE ~/$PI_DIR/$NEW" || lost "m
 info "sha256 verified"
 since=$(r "date +%s") || lost "reading its clock"
 
+# What to come back to: the build running now, and the unit it runs under.
+r "cp ~/$PI_DIR/$SERVICE.service ~/$PI_DIR/.previous.service && printf '%s\n' '$CURRENT' > ~/$PI_DIR/.previous" ||
+    lost "recording the previous build"
+
+# --------------------------------------------------------------------------
+# Install the unit if changed, switch, restart, verify.
+
+failed=""
 # The unit file is a symlink into ~/boiler-sensor; refresh it only if changed.
 if ! r "cat ~/$PI_DIR/$SERVICE.service" 2>/dev/null | cmp -s - "$SERVICE.service"; then
     say "the unit file changed: installing it"
     rsync -e "ssh ${SSHOPTS[*]}" "$SERVICE.service" "$REMOTE:$PI_DIR/$SERVICE.service" || lost "installing the unit file"
-    r "sudo systemctl daemon-reload"
+    r "sudo systemctl daemon-reload" || failed="systemctl daemon-reload failed on the new unit file"
 fi
 
-# --------------------------------------------------------------------------
-# Switch, restart, verify.
-
-say "switching to $NEW and restarting"
-r "printf '%s\n' '$CURRENT' > ~/$PI_DIR/.previous" || lost "recording the previous build"
-failed=""
-if ! switch_to "$NEW"; then
+if [ -n "$failed" ]; then
+    : # the new unit file is in, so roll back, below
+elif ! { say "switching to $NEW and restarting" && switch_to "$NEW"; }; then
     failed="the restart failed"
 elif ! wait_healthy "$VERSION"; then
     failed="/healthz did not report $VERSION and status ok within ${VERIFY_TIMEOUT}s (last: ${LAST_BODY:-no answer})"
