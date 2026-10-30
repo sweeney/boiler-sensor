@@ -28,6 +28,13 @@ while [ $# -gt 0 ]; do
 done
 shift # host
 [ "${FAKE_SSH_DOWN:-0}" = 1 ] && { echo "ssh: connect: timed out" >&2; exit 255; }
+# The link dropped (by the rsync stub): fail this call, and every later one
+# unless it was only "once".
+if [ -f "$FAKE_STATE/ssh_down" ]; then
+    [ "$(cat "$FAKE_STATE/ssh_down")" = once ] && rm "$FAKE_STATE/ssh_down"
+    echo "ssh: connect: no route to host" >&2
+    exit 255
+fi
 cd "$FAKE_HOME"
 HOME="$FAKE_HOME" PATH="$RSTUBS:$PATH" exec bash -c "$*"
 EOF
@@ -37,6 +44,9 @@ cat >"$STUBS/rsync" <<'EOF'
 [ "${FAKE_RSYNC_FAIL:-0}" = 1 ] && exit 12
 src="${*: -2:1}" dest="${*: -1}"
 cp "$src" "$FAKE_HOME/${dest#*:}"
+# FAKE_SSH_DROP_AFTER_UPLOAD=once|stay: the link drops once the binary is up.
+case "$dest" in *.incoming-*) [ -n "${FAKE_SSH_DROP_AFTER_UPLOAD:-}" ] && echo "$FAKE_SSH_DROP_AFTER_UPLOAD" >"$FAKE_STATE/ssh_down" ;; esac
+true
 EOF
 
 cat >"$STUBS/go" <<'EOF'
@@ -361,6 +371,24 @@ deploy FAKE_CORRUPT=1 -- --yes
 check "a corrupted upload is refused" says 'upload corrupted'
 check "and nothing is switched" link_is "$LEGACY"
 check "and the staged file is removed" [ "$(count '.incoming-*')" -eq 0 ]
+
+fresh
+deploy FAKE_SSH_DROP_AFTER_UPLOAD=once -- --yes
+check "a dropped link after the upload is refused (2, not ssh's 255)" rc_is 2
+check "it says what it was doing" says 'REFUSED: lost .* after the upload'
+check "nothing is switched after the drop" link_is "$LEGACY"
+check "the staged file is removed once the link is back" [ "$(count '.incoming-*')" -eq 0 ]
+check "and so is any half-installed build" [ "$(count 'boiler-sensor-2*')" -eq 3 ]
+
+fresh
+deploy FAKE_SSH_DROP_AFTER_UPLOAD=stay -- --yes
+check "a link that stays down after the upload is refused too" rc_is 2
+check "the staged file cannot be removed then" [ "$(count '.incoming-*')" -eq 1 ]
+rm "$FAKE_STATE/ssh_down"
+sleep 1 # another build name, so another staging name
+deploy -- --yes
+check "the next deploy succeeds" rc_is 0
+check "and removes the stale staged file" [ "$(count '.incoming-*')" -eq 0 ]
 
 fresh
 OUT=$(echo n | env PATH="$STUBS:$PATH" RSTUBS="$RSTUBS" FAKE_HOME="$FAKE_HOME" FAKE_STATE="$FAKE_STATE" \

@@ -326,7 +326,10 @@ confirm "Upload $NEW to $REMOTE, switch $SERVICE to it from $CURRENT and restart
 
 say "uploading $NEW"
 STAGE=".incoming-$NEW"
-cleanup_stage() { r "rm -f ~/$PI_DIR/$STAGE" 2>/dev/null || true; }
+cleanup_stage() { r "rm -f ~/$PI_DIR/$STAGE ~/$PI_DIR/$NEW" 2>/dev/null || true; }
+# lost DOING: the link dropped after the upload, before anything that runs
+# changed. Tidy up if it is back; a later deploy removes what it can't.
+lost() { cleanup_stage; refuse "lost $REMOTE after the upload, $1"; }
 uploaded=0
 for attempt in 1 2 3; do
     if rsync -z --partial --timeout=45 -e "ssh ${SSHOPTS[*]}" "$LOCAL_BIN" "$REMOTE:$PI_DIR/$STAGE"; then
@@ -338,15 +341,16 @@ for attempt in 1 2 3; do
 done
 [ $uploaded -eq 1 ] || { cleanup_stage; refuse "upload failed three times"; }
 local_sum=$(shasum -a 256 "$LOCAL_BIN" | cut -d' ' -f1)
-remote_sum=$(r "sha256sum ~/$PI_DIR/$STAGE" | cut -d' ' -f1)
+remote_sum=$(r "sha256sum ~/$PI_DIR/$STAGE" | cut -d' ' -f1) || lost "checking its sha256"
 [ "$local_sum" = "$remote_sum" ] || { cleanup_stage; refuse "upload corrupted: sha256 $remote_sum, expected $local_sum"; }
-r "chmod 0755 ~/$PI_DIR/$STAGE && mv ~/$PI_DIR/$STAGE ~/$PI_DIR/$NEW"
+r "chmod 0755 ~/$PI_DIR/$STAGE && mv ~/$PI_DIR/$STAGE ~/$PI_DIR/$NEW" || lost "moving it into place"
 info "sha256 verified"
+since=$(r "date +%s") || lost "reading its clock"
 
 # The unit file is a symlink into ~/boiler-sensor; refresh it only if changed.
 if ! r "cat ~/$PI_DIR/$SERVICE.service" 2>/dev/null | cmp -s - "$SERVICE.service"; then
     say "the unit file changed: installing it"
-    rsync -e "ssh ${SSHOPTS[*]}" "$SERVICE.service" "$REMOTE:$PI_DIR/$SERVICE.service"
+    rsync -e "ssh ${SSHOPTS[*]}" "$SERVICE.service" "$REMOTE:$PI_DIR/$SERVICE.service" || lost "installing the unit file"
     r "sudo systemctl daemon-reload"
 fi
 
@@ -354,8 +358,7 @@ fi
 # Switch, restart, verify.
 
 say "switching to $NEW and restarting"
-r "printf '%s\n' '$CURRENT' > ~/$PI_DIR/.previous"
-since=$(r "date +%s")
+r "printf '%s\n' '$CURRENT' > ~/$PI_DIR/.previous" || lost "recording the previous build"
 switch_to "$NEW"
 
 failed=""
@@ -408,7 +411,9 @@ else
 fi
 
 # Keep the newest $KEEP builds, and never the one just switched away from.
-r "cd ~/$PI_DIR && ls -1t | grep '^$SERVICE-2' | tail -n +$((KEEP + 1)) | grep -vx -e '$NEW' -e '$CURRENT' | xargs -r rm -f --"
+# Uploads that a dropped link left staged go too.
+r "cd ~/$PI_DIR && rm -f .incoming-$SERVICE-* && ls -1t | grep '^$SERVICE-2' | tail -n +$((KEEP + 1)) | grep -vx -e '$NEW' -e '$CURRENT' | xargs -r rm -f --" ||
+    warn "could not remove old builds from $REMOTE; the next deploy will"
 
 echo
 say "$SERVICE $VERSION is running on $REMOTE"
