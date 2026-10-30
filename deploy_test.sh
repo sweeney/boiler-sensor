@@ -111,7 +111,7 @@ cat >"$RSTUBS/sudo" <<'EOF'
 #!/usr/bin/env bash
 [ "$1" = -n ] && shift
 [ "${FAKE_SUDO_PW:-0}" = 1 ] && exit 1
-exec "$@"
+FAKE_AS_ROOT=1 exec "$@"
 EOF
 
 cat >"$RSTUBS/systemctl" <<'EOF'
@@ -119,6 +119,7 @@ cat >"$RSTUBS/systemctl" <<'EOF'
 echo "systemctl $*" >>"$FAKE_STATE/log"
 case "$1" in
     is-active) echo active ;;
+    show) cat "$FAKE_STATE/invocation" ;; # show -p InvocationID --value
     daemon-reload)
         # FAKE_RELOAD_FAIL=1: the first daemon-reload fails.
         if [ "${FAKE_RELOAD_FAIL:-0}" = 1 ] && [ ! -f "$FAKE_STATE/reload_failed" ]; then
@@ -134,7 +135,14 @@ case "$1" in
             echo "Job for boiler-sensor.service failed." >&2
             exit 1
         fi
+        # The old process may log on its way out, under its own invocation.
+        old=$(cat "$FAKE_STATE/invocation")
+        [ -n "${FAKE_OLD_STOP_LOG:-}" ] && printf '%s %s\n' "$old" "$FAKE_OLD_STOP_LOG" >>"$FAKE_STATE/journal"
         echo "$target" >"$FAKE_STATE/running"
+        inv="inv$(wc -l <"$FAKE_STATE/log" | tr -d ' ')"
+        echo "$inv" >"$FAKE_STATE/invocation"
+        echo "$inv boiler-sensor $target starting" >>"$FAKE_STATE/journal"
+        [ "${FAKE_PANIC:-0}" = 1 ] && echo "$inv panic: runtime error: index out of range" >>"$FAKE_STATE/journal"
         n=$(wc -l <"$FAKE_STATE/log" | tr -d ' ')
         printf '2026-10-30T10:%02d:00Z\n' "$n" >"$FAKE_STATE/started" ;;
 esac
@@ -142,8 +150,18 @@ EOF
 
 cat >"$RSTUBS/journalctl" <<'EOF'
 #!/usr/bin/env bash
-echo "boiler-sensor $(cat "$FAKE_STATE/running")"
-[ "${FAKE_PANIC:-0}" = 1 ] && echo "panic: runtime error: index out of range"
+# Lines in $FAKE_STATE/journal are "<invocation> <message>". --since is
+# ignored: every line here is "since" a deploy's start.
+[ "${FAKE_JOURNAL_BROKEN:-0}" = 1 ] && { echo "journal is corrupt" >&2; exit 1; }
+if [ "${FAKE_JOURNAL_NEEDS_ROOT:-0}" = 1 ] && [ "${FAKE_AS_ROOT:-0}" != 1 ]; then
+    echo "No journal files were opened due to insufficient permissions." >&2
+    exit 1
+fi
+want=""
+for a in "$@"; do case "$a" in _SYSTEMD_INVOCATION_ID=*) want="${a#*=}" ;; esac; done
+while read -r inv msg; do
+    [ -z "$want" ] || [ "$inv" = "$want" ] && echo "$msg"
+done <"$FAKE_STATE/journal"
 true
 EOF
 
@@ -181,6 +199,8 @@ fresh() {
     echo OFF >"$FAKE_STATE/ch"
     echo OFF >"$FAKE_STATE/hw"
     : >"$FAKE_STATE/log"
+    echo inv0 >"$FAKE_STATE/invocation"
+    echo "inv0 boiler-sensor $LEGACY running" >"$FAKE_STATE/journal"
 
     REPO="$WORK/case/repo"
     git init -q --bare "$WORK/case/origin.git"
@@ -317,6 +337,21 @@ fresh
 deploy FAKE_PANIC=1 -- --yes
 check "a panic in the journal triggers rollback" link_is "$LEGACY"
 check "it quotes the panic" says 'panic: runtime error'
+
+fresh
+deploy FAKE_PANIC=1 FAKE_JOURNAL_NEEDS_ROOT=1 -- --yes
+check "the journal is read with sudo: a panic is still caught" link_is "$LEGACY"
+check "and quoted" says 'panic: runtime error'
+
+fresh
+deploy FAKE_JOURNAL_BROKEN=1 -- --yes
+check "a journal that cannot be read fails verification" rc_is 1
+check "it says the journal could not be read" says 'cannot read the journal'
+
+fresh
+deploy FAKE_OLD_STOP_LOG="mqtt: fatal: connection lost while stopping" -- --yes
+check "the old build's shutdown output does not fail the new build" rc_is 0
+check "the new build stays" new_build_is_running
 
 fresh
 deploy FAKE_STALE_HB=1 -- --yes

@@ -163,7 +163,7 @@ rollback_to() {
     echo >&2
     echo "!! ROLLBACK DID NOT COME UP HEALTHY. $SERVICE needs a person now." >&2
     echo "!! Last answer: ${LAST_BODY:-none}" >&2
-    r "systemctl status $SERVICE --no-pager -n 0; journalctl -u $SERVICE -n 30 --no-pager -o cat" >&2 || true
+    r "systemctl status $SERVICE --no-pager -n 0; sudo journalctl -u $SERVICE -n 30 --no-pager -o cat" >&2 || true
     exit 3
 }
 
@@ -392,9 +392,15 @@ else
     fi
 fi
 
+# The new process's own output only: from $since the journal also holds the
+# old build's shutdown. sudo, as the old script used: the deploy user may not
+# read the system journal, and an unread journal must not pass. (Go's
+# log.Fatal prints no "fatal"; the exit it causes fails the stay-up check.)
 if [ -z "$failed" ]; then
-    journal=$(r "journalctl -u $SERVICE --since @$since --no-pager -o cat" || true)
-    if grep -qiE 'fatal|panic' <<<"$journal"; then
+    if ! journal=$(r "inv=\$(systemctl show -p InvocationID --value $SERVICE) && [ -n \"\$inv\" ] &&
+        sudo journalctl _SYSTEMD_INVOCATION_ID=\$inv --no-pager -o cat"); then
+        failed="cannot read the journal of $NEW"
+    elif grep -qiE 'fatal|panic' <<<"$journal"; then
         failed="the journal shows: $(grep -iE 'fatal|panic' <<<"$journal" | head -3)"
     fi
 fi
@@ -411,7 +417,7 @@ fi
 if [ -n "$failed" ]; then
     echo >&2
     echo "!! $NEW FAILED VERIFICATION: $failed" >&2
-    r "journalctl -u $SERVICE --since @$since --no-pager -o cat" 2>/dev/null | tail -20 | sed 's/^/   | /' >&2 || true
+    r "sudo journalctl -u $SERVICE --since @$since --no-pager -o cat" 2>/dev/null | tail -20 | sed 's/^/   | /' >&2 || true
     r "printf '%s\n' '$NEW' > ~/$PI_DIR/.previous" || warn "could not record $NEW in .previous"
     rollback_to "$CURRENT"
     echo "$NEW stays on $REMOTE for a look; the next deploy's cleanup removes it." >&2
@@ -433,5 +439,5 @@ r "cd ~/$PI_DIR && rm -f .incoming-$SERVICE-* && ls -1t | grep '^$SERVICE-2' | t
 
 echo
 say "$SERVICE $VERSION is running on $REMOTE"
-r "journalctl -u $SERVICE --since @$since --no-pager -o cat" | tail -8 | sed 's/^/    /' || true
+r "sudo journalctl -u $SERVICE --since @$since --no-pager -o cat" | tail -8 | sed 's/^/    /' || true
 info "to undo: ./deploy.sh --rollback (back to $CURRENT)"
