@@ -160,6 +160,18 @@ jobs:
             coverage.txt
           retention-days: 30
 
+  # deploy.sh, setup-pi.sh and deploy/lib.sh against stubs: no Pi, no network.
+  deploy-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: shellcheck -x deploy.sh setup-pi.sh deploy/lib.sh deploy_test.sh
+
+      - name: deploy_test.sh
+        run: ./deploy_test.sh
+
   build:
     runs-on: ubuntu-latest
     strategy:
