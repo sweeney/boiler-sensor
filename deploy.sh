@@ -206,6 +206,15 @@ info "arch $remote_arch, service $active"
 [ "${free_kb:-0}" -gt 51200 ] || refuse "less than 50MB free in the home directory on $REMOTE"
 info "running build: $CURRENT"
 
+# unhealthy WHY: a deploy measures the new build against the old one, and its
+# rollback expects the old one back as healthy as it was. If it isn't healthy
+# now (the broker down, say), the deploy can only fail, and its rollback be
+# judged failed too. A rollback goes ahead: this may be why it is wanted.
+unhealthy() {
+    [ "$MODE" = rollback ] && { warn "$1"; return 0; }
+    refuse "$1. Deploy once it is"
+}
+
 # The state now, to compare with after.
 pre_body=$(http /index.json) || pre_body=""
 if [ -n "$pre_body" ]; then
@@ -216,14 +225,14 @@ if [ -n "$pre_body" ]; then
     broker=$(jget status.mqtt.broker <<<"$pre_body")
     info "state: ch=$PRE_CH hw=$PRE_HW ready=$pre_ready mqtt=$pre_mqtt, up $(jget status.uptime_seconds <<<"$pre_body")s"
     [ "$pre_ready" = true ] && [ "$pre_mqtt" = true ] ||
-        warn "the running build is not fully healthy right now"
+        unhealthy "the running build is not healthy right now (ready=$pre_ready mqtt=$pre_mqtt)"
     # tcp://host:port -> host, port
     broker="${broker#*://}"
     BROKER_HOST="${broker%%:*}"
     BROKER_PORT="${broker##*:}"
     [ "$BROKER_PORT" != "$BROKER_HOST" ] || BROKER_PORT=1883
 else
-    warn "http://$HTTP_HOST/index.json did not answer; health will be judged from /healthz alone"
+    unhealthy "the running build is not healthy right now: http://$HTTP_HOST/index.json did not answer"
 fi
 
 if [ "$MODE" = rollback ]; then

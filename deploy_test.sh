@@ -70,15 +70,18 @@ if [ "${FAKE_CRASHLOOP:-0}" = 1 ] && [ -n "$ver" ]; then
     started="2026-10-30T10:00:0${n: -1}Z"
 fi
 ch=$(cat "$FAKE_STATE/ch") hw=$(cat "$FAKE_STATE/hw")
+mqtt=true
+[ "${FAKE_MQTT_DOWN:-0}" = 1 ] && mqtt=false
 case "$path" in
     /index.json)
-        printf '{"status":{"ch":"%s","hw":"%s","ready":true,"uptime_seconds":5,"start_time":"%s","mqtt":{"connected":true,"broker":"tcp://127.0.0.1:1883"}}}\n' "$ch" "$hw" "$started" ;;
+        printf '{"status":{"ch":"%s","hw":"%s","ready":true,"uptime_seconds":5,"start_time":"%s","mqtt":{"connected":%s,"broker":"tcp://127.0.0.1:1883"}}}\n' "$ch" "$hw" "$started" "$mqtt" ;;
     /healthz)
         [ -n "$ver" ] || exit 22 # a pre-/healthz build: 404
         status=ok
+        [ "$mqtt" = true ] || status=degraded
         [ "${FAKE_NEW_BROKEN:-0}" = 1 ] && status=starting
-        printf '{"status":"%s","version":"%s","start_time":"%s","ready":true,"mqtt_connected":true,"channels":{"ch":"%s","hw":"%s"}}\n' \
-            "$status" "$ver" "$started" "$ch" "$hw" ;;
+        printf '{"status":"%s","version":"%s","start_time":"%s","ready":true,"mqtt_connected":%s,"channels":{"ch":"%s","hw":"%s"}}\n' \
+            "$status" "$ver" "$started" "$mqtt" "$ch" "$hw" ;;
     *) exit 22 ;;
 esac
 EOF
@@ -273,6 +276,24 @@ fresh
 deploy FAKE_STALE_HB=1 -- --yes
 check "a stale broker heartbeat triggers rollback" link_is "$LEGACY"
 check "it explains the broker check" says 'not a HEARTBEAT from this run'
+
+fresh
+deploy FAKE_MQTT_DOWN=1 -- --yes
+check "a running build without MQTT is refused before the deploy" rc_is 2
+check "it says the running build is not healthy" says 'running build is not healthy'
+check "and restarts nothing" [ "$(restarts)" -eq 0 ]
+deploy FAKE_MQTT_DOWN=1 -- --check
+check "--check fails on it too" rc_is 2
+
+fresh
+deploy FAKE_HTTP_DOWN=1 -- --yes
+check "a running build that does not answer is refused" rc_is 2
+check "and restarts nothing (no answer)" [ "$(restarts)" -eq 0 ]
+
+fresh
+deploy -- --yes
+deploy FAKE_MQTT_DOWN=1 -- --check --rollback
+check "an unhealthy running build does not block --rollback" rc_is 0
 
 fresh
 deploy FAKE_NO_BROKER=1 -- --yes
