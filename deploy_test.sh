@@ -243,7 +243,7 @@ fresh() {
     echo "inv0 boiler-sensor $LEGACY running" >"$FAKE_STATE/journal"
 
     REPO="$WORK/case/repo"
-    git init -q --bare "$WORK/case/origin.git"
+    git init -q --bare -b main "$WORK/case/origin.git"
     git init -q -b main "$REPO"
     mkdir -p "$REPO/deploy"
     cp "$HERE/deploy.sh" "$HERE/setup-pi.sh" "$HERE/boiler-sensor.service" "$HERE/.gitignore" "$REPO/"
