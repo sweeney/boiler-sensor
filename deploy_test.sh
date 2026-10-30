@@ -493,13 +493,42 @@ GIT_COMMITTER_DATE="2026-10-29T09:00:00Z" git -C "$WORK/case/other" -c user.name
 git -C "$WORK/case/other" push -q -f origin main
 deploy -- --yes
 check "a commit force-pushed away is refused, though origin/main is stale" rc_is 2
-check "it says the commit is not on the remote" says 'not on any remote branch'
+check "it cannot tell before a fetch, and says so" says 'cannot tell that .* is pushed'
+git -C "$REPO" fetch -q origin
+deploy -- --yes
+check "after a fetch it is still refused" rc_is 2
+check "and says the commit is not on the remote" says 'not on any remote branch'
+
+# --check must not touch the checkout: here a remote branch deleted upstream
+# would be pruned by a fetch.
+for script in deploy setup; do
+    bare
+    [ $script = deploy ] && fresh
+    git -C "$REPO" push -q origin main:gone
+    git -C "$REPO" fetch -q origin
+    git -C "$WORK/case/origin.git" branch -q -D gone
+    refs=$(git -C "$REPO" for-each-ref)
+    $script -- --check
+    check "$script --check leaves the checkout's refs alone" [ "$(git -C "$REPO" for-each-ref)" = "$refs" ]
+done
 
 fresh
 git -C "$REPO" remote set-url origin "$WORK/case/nowhere.git"
 deploy -- --yes
-check "a remote that cannot be fetched is refused" rc_is 2
-check "it says so" says 'cannot fetch'
+check "a remote that cannot be reached is refused" rc_is 2
+check "it says so" says 'cannot reach the remote'
+
+fresh
+# Pushed from elsewhere on top of this commit, not fetched here.
+git clone -q "$WORK/case/origin.git" "$WORK/case/other"
+git -C "$WORK/case/other" -c user.name=t -c user.email=t@t commit -q --allow-empty -m later
+git -C "$WORK/case/other" push -q origin main
+deploy -- --yes
+check "a remote ahead with commits not here is refused" rc_is 2
+check "with a hint to fetch" says 'git fetch, then again'
+git -C "$REPO" fetch -q origin
+deploy -- --yes
+check "after a fetch, a commit behind the remote's head counts as pushed" rc_is 0
 
 fresh
 deploy FAKE_TEST_RC=1 -- --yes

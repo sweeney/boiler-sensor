@@ -14,9 +14,8 @@
 #   ./deploy.sh [opts] user@host another Pi
 #
 # What a deploy does:
-#   1. Pre-flight, all read-only (apart from a `git fetch`): a clean, pushed
-#      commit (the version is the commit hash, so it must exist on GitHub, as
-#      fetched now, and its date must be final),
+#   1. Pre-flight, all read-only: a clean, pushed commit (the version is the
+#      commit hash, so it must be on GitHub as it is now, and its date final),
 #      `go vet` and `go test`, the Pi reachable with passwordless sudo, the
 #      service and its symlinks as expected, the current build healthy, and the
 #      broker's retained heartbeat readable from here.
@@ -249,11 +248,13 @@ if commit_dirty; then
 fi
 pushed=0
 commit_pushed || pushed=$?
-if [ $pushed -eq 2 ]; then
+if [ $pushed -eq 2 ] || [ $pushed -eq 3 ]; then
+    why="cannot reach the remote"
+    [ $pushed -eq 2 ] || why="the remote has commits this checkout lacks (git fetch, then again)"
     if [ "$CHECK" -eq 1 ]; then
-        would_refuse "cannot fetch from the remote to see that $VERSION is pushed"
+        would_refuse "$why, so cannot tell that $VERSION is pushed"
     else
-        refuse "cannot fetch from the remote, so cannot tell that $VERSION is still pushed"
+        refuse "$why, so cannot tell that $VERSION is pushed"
     fi
 elif [ $pushed -ne 0 ]; then
     if [ "$CHECK" -eq 1 ]; then

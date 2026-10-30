@@ -72,14 +72,31 @@ commit_dirty() {
     ! git diff --quiet HEAD -- || [ -n "$(git ls-files --others --exclude-standard -- cmd internal go.mod go.sum)" ]
 }
 
-# commit_pushed: 0 if HEAD is on a remote branch, 1 if not, 2 if the remote
-# cannot be fetched. The build names its commit in /healthz, and rewriting a
-# commit's date changes its hash: deploying only what is pushed means the
-# dates are settled. It fetches first, as a stale origin/main still holds a
-# hash force-pushed away.
+# commit_pushed: 0 if HEAD is on a branch of a remote as it is now, 1 if not,
+# 2 if a remote cannot be reached, 3 if a remote branch has commits this
+# checkout lacks (so it cannot tell: fetch first). The build names its commit
+# in /healthz, and rewriting a commit's date changes its hash: deploying only
+# what is pushed means the dates are settled. It asks the remote with
+# ls-remote rather than trusting origin/*, which still holds a hash
+# force-pushed away, and rather than fetching, which would change the
+# checkout under --check.
 commit_pushed() {
-    git fetch --quiet --all --prune 2>/dev/null || return 2
-    [ -n "$(git branch -r --contains HEAD 2>/dev/null)" ]
+    local head remote heads sha unknown=0
+    head=$(git rev-parse HEAD)
+    for remote in $(git remote); do
+        heads=$(git ls-remote --heads "$remote" 2>/dev/null) || return 2
+        while read -r sha _; do
+            [ -n "$sha" ] || continue
+            [ "$sha" = "$head" ] && return 0
+            if git cat-file -e "$sha^{commit}" 2>/dev/null; then
+                git merge-base --is-ancestor "$head" "$sha" && return 0
+            else
+                unknown=1
+            fi
+        done <<<"$heads"
+    done
+    [ $unknown -eq 0 ] || return 3
+    return 1
 }
 
 vet_and_test() {

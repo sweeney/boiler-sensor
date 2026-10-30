@@ -108,7 +108,8 @@ if [ "$build" = MISSING ]; then
     ! commit_dirty || refuse "uncommitted changes. The version is the commit, so commit first"
     pushed=0
     commit_pushed || pushed=$?
-    [ $pushed -ne 2 ] || refuse "cannot fetch from the remote, so cannot tell that $VERSION is pushed"
+    [ $pushed -ne 2 ] || refuse "cannot reach the remote, so cannot tell that $VERSION is pushed"
+    [ $pushed -ne 3 ] || refuse "the remote has commits this checkout lacks (git fetch, then again), so cannot tell that $VERSION is pushed"
     [ $pushed -eq 0 ] || refuse "$VERSION is not on any remote branch. Settle its date and push it first"
     todo+=("build $VERSION for $remote_arch, upload it and link ~/$PI_DIR/$LINK to it")
 fi
