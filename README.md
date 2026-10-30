@@ -189,8 +189,9 @@ A deploy:
 2. **Builds** for the Pi's architecture with `-X main.version=<commit>`.
 3. **Uploads** as `boiler-sensor-<timestamp>-<commit>`, checks the sha256, then
    switches the `boiler-sensor-arm` symlink and restarts. The build it replaced
-   is recorded in `~/boiler-sensor/.previous`, and its unit file kept as
-   `.previous.service` so a rollback restores both.
+   is recorded in `~/boiler-sensor/.previous`. Each build's unit file is kept
+   with it in `~/boiler-sensor/.units/`, and a switch to a build, forward or
+   back, installs its unit first if it differs.
 4. **Verifies:** `/healthz` reports the new version with status `ok`, it stays
    up, the journal has no fatal error, and the broker holds a `HEARTBEAT` from
    the new run (what statehouse sees).
@@ -229,7 +230,7 @@ at those paths. `./deploy_test.sh` tests it too.
 |-----------------|--------------------------------------------|
 | Binary          | `~/boiler-sensor/boiler-sensor-<timestamp>-<commit>`|
 | Rollback target | `~/boiler-sensor/.previous`                |
-| Its unit file   | `~/boiler-sensor/.previous.service`        |
+| Unit per build  | `~/boiler-sensor/.units/<build>.service`   |
 | Active symlink  | `~/boiler-sensor/boiler-sensor-arm`        |
 | System symlink  | `/usr/local/bin/boiler-sensor`             |
 | Service file    | `~/boiler-sensor/boiler-sensor.service`    |

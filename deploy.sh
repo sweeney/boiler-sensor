@@ -20,13 +20,15 @@
 #   2. Build for the Pi's architecture, stamped with the commit.
 #   3. Upload under a new name, check the sha256, and only then switch the
 #      symlink and restart. The old build stays on disk, and its name is kept
-#      in ~/boiler-sensor/.previous for --rollback, its unit file in
-#      .previous.service. A changed unit file is installed before the restart.
+#      in ~/boiler-sensor/.previous for --rollback. Each build's unit file is
+#      kept with it, in ~/boiler-sensor/.units/<build>.service, and a switch to
+#      a build (forward or back) installs its unit first if it differs.
 #   4. Verify: /healthz answers with this version and status "ok" (baselined,
 #      MQTT connected), stays up, the journal shows no fatal error, and the
 #      broker holds a HEARTBEAT from this run (what statehouse sees).
 #   5. If any of 4 fails, switch back to the previous build and its unit file,
-#      restart it and check it is healthy again.
+#      restart it and check it is healthy again. If installing the new unit
+#      file fails, the old one is put back and nothing is restarted (exit 2).
 #
 # A restart costs a few seconds without monitoring. The new process publishes
 # its state as a retained HEARTBEAT as soon as it has a baseline, so a
@@ -142,29 +144,38 @@ switch_to() {
     r "cd ~/$PI_DIR && ln -sfn '$1' $LINK && sudo systemctl restart $SERVICE"
 }
 
-# swap_units: put back the unit file that ran with the build in .previous,
-# keeping the one replaced there, so a rollback can itself be rolled back.
-# Builds deployed before .previous.service existed have nothing to swap.
-swap_units() {
-    r "cd ~/$PI_DIR && if [ -f .previous.service ] && ! cmp -s .previous.service $SERVICE.service; then
-        mv $SERVICE.service .swap.service && mv .previous.service $SERVICE.service &&
-        mv .swap.service .previous.service && sudo systemctl daemon-reload && echo '    unit file swapped back'
+# Each build's unit file, kept beside it so that switching to a build, forward
+# or back, can put its unit in place too. Builds from before this have none;
+# switching to one leaves the unit file as it is.
+UNITS=.units
+
+# install_unit NAME: make NAME's unit file the installed one, if it has one
+# that differs, and have systemd reload it.
+install_unit() {
+    r "cd ~/$PI_DIR && if [ -f $UNITS/$1.service ] && ! cmp -s $UNITS/$1.service $SERVICE.service; then
+        cp $UNITS/$1.service .$SERVICE.service.tmp && mv .$SERVICE.service.tmp $SERVICE.service &&
+        sudo systemctl daemon-reload && echo '    installed the unit file of $1'
     fi"
+}
+
+# needs_person WHAT: stop, with what is known, for someone to look at the Pi.
+needs_person() {
+    echo >&2
+    echo "!! $1. $SERVICE needs a person now." >&2
+    echo "!! Last answer: ${LAST_BODY:-none}" >&2
+    r "systemctl status $SERVICE --no-pager -n 0; sudo journalctl -u $SERVICE -n 30 --no-pager -o cat" >&2 || true
+    exit 3
 }
 
 rollback_to() {
     local prev="$1"
     say "rolling back to $prev"
     LAST_BODY=""
-    if swap_units && switch_to "$prev" && wait_healthy "$(version_of "$prev")"; then
+    if install_unit "$prev" && switch_to "$prev" && wait_healthy "$(version_of "$prev")"; then
         info "$prev is running and healthy again"
         return 0
     fi
-    echo >&2
-    echo "!! ROLLBACK DID NOT COME UP HEALTHY. $SERVICE needs a person now." >&2
-    echo "!! Last answer: ${LAST_BODY:-none}" >&2
-    r "systemctl status $SERVICE --no-pager -n 0; sudo journalctl -u $SERVICE -n 30 --no-pager -o cat" >&2 || true
-    exit 3
+    needs_person "ROLLBACK DID NOT COME UP HEALTHY"
 }
 
 confirm() {
@@ -338,7 +349,7 @@ confirm "Upload $NEW to $REMOTE, switch $SERVICE to it from $CURRENT and restart
 
 say "uploading $NEW"
 STAGE=".incoming-$NEW"
-cleanup_stage() { r "rm -f ~/$PI_DIR/$STAGE ~/$PI_DIR/$NEW" 2>/dev/null || true; }
+cleanup_stage() { r "rm -f ~/$PI_DIR/$STAGE ~/$PI_DIR/$NEW ~/$PI_DIR/$UNITS/$NEW.service" 2>/dev/null || true; }
 # lost DOING: the link dropped after the upload, before anything that runs
 # changed. Tidy up if it is back; a later deploy removes what it can't.
 lost() { cleanup_stage; refuse "lost $REMOTE after the upload, $1"; }
@@ -359,24 +370,35 @@ r "chmod 0755 ~/$PI_DIR/$STAGE && mv ~/$PI_DIR/$STAGE ~/$PI_DIR/$NEW" || lost "m
 info "sha256 verified"
 since=$(r "date +%s") || lost "reading its clock"
 
-# What to come back to: the build running now, and the unit it runs under.
-r "cp ~/$PI_DIR/$SERVICE.service ~/$PI_DIR/.previous.service && printf '%s\n' '$CURRENT' > ~/$PI_DIR/.previous" ||
-    lost "recording the previous build"
+# The unit file the running build runs under (if any: an old layout may have
+# none here), and the new build's, beside their builds. Nothing that runs
+# reads these.
+r "mkdir -p ~/$PI_DIR/$UNITS && cd ~/$PI_DIR && { [ ! -f $SERVICE.service ] || cp $SERVICE.service $UNITS/$CURRENT.service; }" ||
+    lost "recording the running build's unit file"
+rsync -e "ssh ${SSHOPTS[*]}" "$SERVICE.service" "$REMOTE:$PI_DIR/$UNITS/$NEW.service" || lost "uploading the unit file"
+
+# put_back_unit: after a failed install of the new unit, nothing has restarted:
+# put the running build's unit back (or none, if it had none here). The
+# reload is best effort: if the install's reload failed, systemd still has
+# the old unit loaded.
+put_back_unit() {
+    r "cd ~/$PI_DIR && if [ -f $UNITS/$CURRENT.service ]; then
+        cp $UNITS/$CURRENT.service .$SERVICE.service.tmp && mv .$SERVICE.service.tmp $SERVICE.service
+    else rm -f $SERVICE.service; fi && { sudo systemctl daemon-reload || true; }"
+}
 
 # --------------------------------------------------------------------------
 # Install the unit if changed, switch, restart, verify.
 
-failed=""
-# The unit file is a symlink into ~/boiler-sensor; refresh it only if changed.
-if ! r "cat ~/$PI_DIR/$SERVICE.service" 2>/dev/null | cmp -s - "$SERVICE.service"; then
-    say "the unit file changed: installing it"
-    rsync -e "ssh ${SSHOPTS[*]}" "$SERVICE.service" "$REMOTE:$PI_DIR/$SERVICE.service" || lost "installing the unit file"
-    r "sudo systemctl daemon-reload" || failed="systemctl daemon-reload failed on the new unit file"
+if ! install_unit "$NEW"; then
+    put_back_unit || needs_person "installing the unit file of $NEW failed, and so did putting the old one back"
+    cleanup_stage
+    refuse "installing the unit file of $NEW failed (systemctl daemon-reload, or the link). The old unit file is back"
 fi
 
-if [ -n "$failed" ]; then
-    : # the new unit file is in, so roll back, below
-elif ! { say "switching to $NEW and restarting" && switch_to "$NEW"; }; then
+failed=""
+if ! { say "switching to $NEW and restarting" &&
+    r "printf '%s\n' '$CURRENT' > ~/$PI_DIR/.previous" && switch_to "$NEW"; }; then
     failed="the restart failed"
 elif ! wait_healthy "$VERSION"; then
     failed="/healthz did not report $VERSION and status ok within ${VERIFY_TIMEOUT}s (last: ${LAST_BODY:-no answer})"
@@ -433,8 +455,10 @@ else
 fi
 
 # Keep the newest $KEEP builds, and never the one just switched away from.
-# Uploads that a dropped link left staged go too.
-r "cd ~/$PI_DIR && rm -f .incoming-$SERVICE-* && ls -1t | grep '^$SERVICE-2' | tail -n +$((KEEP + 1)) | grep -vx -e '$NEW' -e '$CURRENT' | xargs -r rm -f --" ||
+# Uploads that a dropped link left staged go too, and the unit files of
+# builds no longer there.
+r "cd ~/$PI_DIR && rm -f .incoming-$SERVICE-* && ls -1t | grep '^$SERVICE-2' | tail -n +$((KEEP + 1)) | grep -vx -e '$NEW' -e '$CURRENT' | xargs -r rm -f -- &&
+    for u in $UNITS/*.service; do [ ! -f \"\$u\" ] || [ -e \"\$(basename \"\$u\" .service)\" ] || rm -f \"\$u\"; done" ||
     warn "could not remove old builds from $REMOTE; the next deploy will"
 
 echo

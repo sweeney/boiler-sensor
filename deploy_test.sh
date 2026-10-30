@@ -45,6 +45,8 @@ cat >"$STUBS/rsync" <<'EOF'
 [ "${FAKE_RSYNC_FAIL:-0}" = 1 ] && exit 12
 src="${*: -2:1}" dest="${*: -1}"
 cp "$src" "$FAKE_HOME/${dest#*:}"
+# FAKE_UNIT_RSYNC_FAIL=1: a unit file arrives, then rsync fails anyway.
+case "$dest" in *.service) [ "${FAKE_UNIT_RSYNC_FAIL:-0}" = 1 ] && exit 12 ;; esac
 # FAKE_SSH_DROP_AFTER_UPLOAD=once|stay: the link drops once the binary is up.
 case "$dest" in *.incoming-*) [ -n "${FAKE_SSH_DROP_AFTER_UPLOAD:-}" ] && echo "$FAKE_SSH_DROP_AFTER_UPLOAD" >"$FAKE_STATE/ssh_down" ;; esac
 true
@@ -124,7 +126,8 @@ case "$1" in
     enable) echo enabled >"$FAKE_STATE/enabled" ;;
     show) cat "$FAKE_STATE/invocation" ;; # show -p InvocationID --value
     daemon-reload)
-        # FAKE_RELOAD_FAIL=1: the first daemon-reload fails.
+        # FAKE_RELOAD_FAIL=1: the first daemon-reload fails; =always: every one.
+        [ "${FAKE_RELOAD_FAIL:-0}" = always ] && exit 1
         if [ "${FAKE_RELOAD_FAIL:-0}" = 1 ] && [ ! -f "$FAKE_STATE/reload_failed" ]; then
             touch "$FAKE_STATE/reload_failed"
             exit 1
@@ -296,6 +299,14 @@ change_unit() {
 
 # pi_link PATH: where a symlink on the fake Pi points, or MISSING.
 pi_link() { readlink "$1" || echo MISSING; }
+# orphan_units_none: every kept unit file belongs to a build still on the Pi.
+orphan_units_none() {
+    local u
+    for u in "$FAKE_HOME/boiler-sensor/.units"/*.service; do
+        [ -e "$u" ] || continue
+        [ -e "$FAKE_HOME/boiler-sensor/$(basename "$u" .service)" ] || return 1
+    done
+}
 nothing_set_up() {
     [ ! -e "$FAKE_HOME/boiler-sensor" ] && [ "$(pi_link "$WORK/case/bin/boiler-sensor")" = MISSING ] &&
         [ "$(pi_link "$WORK/case/etc/boiler-sensor.service")" = MISSING ] && [ "$(cat "$FAKE_STATE/enabled")" = not-found ]
@@ -512,7 +523,7 @@ check "a declined deploy uploads and changes nothing" [ "$(count '*')" -eq 5 ]
 fresh
 change_unit
 deploy -- --yes
-check "a changed unit file is installed" says 'unit file changed'
+check "a changed unit file is installed" says 'installed the unit file of'
 check "and systemd reloaded" [ "$(reloads)" -eq 1 ]
 check "the new unit is in place" unit_is "$REPO/boiler-sensor.service"
 deploy -- --rollback --yes
@@ -530,13 +541,44 @@ check "the old unit file is back" unit_is "$HERE/boiler-sensor.service"
 check "and systemd reloaded with it" [ "$(reloads)" -eq 2 ]
 check "and the old build runs" [ "$(cat "$FAKE_STATE/running")" = "$LEGACY" ]
 
+OLDER=boiler-sensor-20260320-093441
+for how in 1 always; do
+    fresh
+    echo "$OLDER" >"$FAKE_HOME/boiler-sensor/.previous"
+    change_unit
+    deploy FAKE_RELOAD_FAIL=$how -- --yes
+    check "daemon-reload failing ($how): refused, not rolled back (exit 2)" rc_is 2
+    check "daemon-reload failing ($how): it says so" says 'daemon-reload'
+    check "daemon-reload failing ($how): the old unit file is back" unit_is "$HERE/boiler-sensor.service"
+    check "daemon-reload failing ($how): .previous is left alone" [ "$(cat "$FAKE_HOME/boiler-sensor/.previous")" = "$OLDER" ]
+    check "daemon-reload failing ($how): no restart" [ "$(restarts)" -eq 0 ]
+    check "daemon-reload failing ($how): the old build runs" link_is "$LEGACY"
+done
+
 fresh
+echo "$OLDER" >"$FAKE_HOME/boiler-sensor/.previous"
 change_unit
-deploy FAKE_RELOAD_FAIL=1 -- --yes
-check "a daemon-reload that fails is rolled back" rc_is 1
-check "it says so" says 'daemon-reload failed'
-check "the old unit is back after the failed reload" unit_is "$HERE/boiler-sensor.service"
-check "the old build runs after the failed reload" link_is "$LEGACY"
+deploy FAKE_UNIT_RSYNC_FAIL=1 -- --yes
+check "a unit upload that fails after landing is refused" rc_is 2
+check "the unit file on the Pi is still the old one" unit_is "$HERE/boiler-sensor.service"
+check ".previous is left alone after the failed unit upload" [ "$(cat "$FAKE_HOME/boiler-sensor/.previous")" = "$OLDER" ]
+check "nothing restarted after the failed unit upload" [ "$(restarts)" -eq 0 ]
+
+fresh
+for _ in 1 2 3; do
+    deploy -- --yes
+    sleep 1 # a new timestamp in the build name
+done
+check "three deploys later the legacy build is cleaned out" [ ! -e "$FAKE_HOME/boiler-sensor/$LEGACY" ]
+check "and its unit file with it" orphan_units_none
+check "one unit file per kept build" [ "$(find "$FAKE_HOME/boiler-sensor/.units" -name '*.service' | wc -l | tr -d ' ')" -eq 3 ]
+
+fresh
+rm "$FAKE_HOME/boiler-sensor/boiler-sensor.service"
+deploy -- --yes
+check "a Pi without ~/boiler-sensor/boiler-sensor.service can be deployed to" rc_is 0
+check "and gets the unit file" unit_is "$HERE/boiler-sensor.service"
+check "and runs the new build" new_build_is_running
 
 fresh
 deploy -- --yes
