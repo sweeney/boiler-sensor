@@ -317,6 +317,18 @@ check "a changed unit file is installed" says 'unit file changed'
 check "and systemd reloaded" [ "$(grep -c daemon-reload "$FAKE_STATE/log")" -eq 1 ]
 
 fresh
+deploy -- --yes
+deployed=$(link)
+for order in "--check --rollback" "--rollback --check"; do
+    # shellcheck disable=SC2086 # split the flags on purpose
+    deploy -- $order --yes
+    check "$order is read-only: exits 0" rc_is 0
+    check "$order is read-only: the link is unchanged" link_is "$deployed"
+    check "$order is read-only: no restart" [ "$(restarts)" -eq 1 ]
+    check "$order says what a rollback would do" says "A rollback would switch .* back to $LEGACY"
+done
+
+fresh
 deploy -- --rollback --yes
 check "--rollback with nothing recorded is refused" says 'nothing recorded'
 

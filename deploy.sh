@@ -7,6 +7,7 @@
 #   ./deploy.sh                  deploy to sweeney@pi0wh (asks before changing anything)
 #   ./deploy.sh --yes            deploy without asking
 #   ./deploy.sh --rollback       switch back to the build that ran before the last deploy
+#   ./deploy.sh --check --rollback   read-only: what --rollback would do
 #   ./deploy.sh [opts] user@host another Pi
 #
 # What a deploy does:
@@ -48,10 +49,10 @@ SETTLE="${DEPLOY_SETTLE:-5}"
 
 usage() { sed -n '3,/^set -euo/{/^set -euo/d;s/^# \{0,1\}//p;}' "$0"; }
 
-MODE=deploy YES=0 ALLOW_DIRTY=0 REMOTE=""
+MODE=deploy CHECK=0 YES=0 ALLOW_DIRTY=0 REMOTE=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --check) MODE=check ;;
+        --check) CHECK=1 ;;
         --rollback) MODE=rollback ;;
         --yes | -y) YES=1 ;;
         --allow-dirty) ALLOW_DIRTY=1 ;;
@@ -228,6 +229,11 @@ if [ "$MODE" = rollback ]; then
     [ "$recorded_prev" != NONE ] || refuse "no ~/$PI_DIR/.previous: nothing recorded to roll back to"
     grep -qx "$recorded_prev" <<<"$builds" || refuse "the recorded previous build $recorded_prev is no longer on $REMOTE"
     [ "$recorded_prev" != "$CURRENT" ] || refuse "$recorded_prev is already running"
+    if [ "$CHECK" -eq 1 ]; then
+        echo
+        say "check passed. A rollback would switch $REMOTE from $CURRENT back to $recorded_prev and restart $SERVICE"
+        exit 0
+    fi
     confirm "Switch $REMOTE from $CURRENT back to $recorded_prev and restart $SERVICE?"
     r "printf '%s\n' '$CURRENT' > ~/$PI_DIR/.previous"
     rollback_to "$recorded_prev"
@@ -256,7 +262,7 @@ if ! git diff --quiet HEAD -- || [ -n "$(git ls-files --others --exclude-standar
     if [ "$ALLOW_DIRTY" -eq 1 ]; then
         VERSION="$VERSION-dirty"
         warn "uncommitted changes: deploying as $VERSION"
-    elif [ "$MODE" = check ]; then
+    elif [ "$CHECK" -eq 1 ]; then
         warn "uncommitted changes: a deploy would refuse (commit first, or --allow-dirty)"
     else
         refuse "uncommitted changes. The version is the commit, so commit first (or --allow-dirty)"
@@ -265,7 +271,7 @@ fi
 # Rewriting a commit's date changes its hash, and the build names its hash in
 # /healthz. Deploying only what is on GitHub means the dates are settled.
 if [ -z "$(git branch -r --contains HEAD 2>/dev/null)" ]; then
-    if [ "$MODE" = check ]; then
+    if [ "$CHECK" -eq 1 ]; then
         warn "$VERSION is not pushed: a deploy would refuse"
     else
         refuse "$VERSION is not on any remote branch. Settle its date and push it first"
@@ -277,7 +283,7 @@ go vet ./... || refuse "go vet failed"
 go test -count=1 ./... >/dev/null || refuse "go test failed (run it to see why)"
 info "pass"
 
-if [ "$MODE" = check ]; then
+if [ "$CHECK" -eq 1 ]; then
     echo
     say "check passed. A deploy would:"
     info "build $VERSION for $remote_arch and upload it as $SERVICE-<timestamp>-$VERSION"

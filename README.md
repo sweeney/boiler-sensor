@@ -176,6 +176,7 @@ GitHub Actions runs on every push to `main` and on pull requests:
 ./deploy.sh              # deploy to sweeney@pi0wh, asking before changing anything
 ./deploy.sh --yes        # without asking
 ./deploy.sh --rollback   # back to the build that ran before the last deploy
+./deploy.sh --check --rollback   # read-only: what --rollback would do
 ./deploy.sh user@host    # a different Pi
 ```
 
