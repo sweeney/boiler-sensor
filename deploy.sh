@@ -6,6 +6,9 @@
 #   ./deploy.sh --check          read-only: run every pre-flight check, change nothing
 #   ./deploy.sh                  deploy to sweeney@pi0wh (asks before changing anything)
 #   ./deploy.sh --yes            deploy without asking
+#   ./deploy.sh --allow-unhealthy  deploy a fix over a running build that is not
+#                                healthy (refused otherwise); its rollback then
+#                                accepts the old build back as it was
 #   ./deploy.sh --rollback       switch back to the build that ran before the last deploy
 #   ./deploy.sh --check --rollback   read-only: what --rollback would do
 #   ./deploy.sh [opts] user@host another Pi
@@ -34,6 +37,8 @@
 # its state as a retained HEARTBEAT as soon as it has a baseline, so a
 # transition missed during the restart is corrected within a second of it.
 #
+# --check goes through every check and exits 2 if a deploy would refuse.
+#
 # Exit: 0 deployed and verified (or --check passed); 1 the new build failed
 # to start or to verify and was rolled back; 2 a pre-flight check failed, the
 # link to the Pi dropped before the switch, or the deploy was declined:
@@ -54,13 +59,14 @@ SETTLE="${DEPLOY_SETTLE:-5}"
 
 usage() { sed -n '3,/^set -euo/{/^set -euo/d;s/^# \{0,1\}//p;}' "$0"; }
 
-MODE=deploy CHECK=0 YES=0 ALLOW_DIRTY=0 REMOTE=""
+MODE=deploy CHECK=0 YES=0 ALLOW_DIRTY=0 ALLOW_UNHEALTHY=0 REMOTE=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --check) CHECK=1 ;;
         --rollback) MODE=rollback ;;
         --yes | -y) YES=1 ;;
         --allow-dirty) ALLOW_DIRTY=1 ;;
+        --allow-unhealthy) ALLOW_UNHEALTHY=1 ;;
         -h | --help) usage; exit 0 ;;
         -*) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
         *) [ -z "$REMOTE" ] || { echo "only one host, please" >&2; exit 2; }; REMOTE="$1" ;;
@@ -80,6 +86,10 @@ say() { printf '==> %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
 warn() { printf '    WARNING: %s\n' "$*" >&2; }
 refuse() { printf '\nREFUSED: %s\nNothing on %s was changed.\n' "$*" "$REMOTE" >&2; exit 2; }
+# would_refuse WHY: under --check, note what a deploy would refuse for and
+# carry on checking; --check fails at the end.
+PROBLEMS=()
+would_refuse() { warn "$1: a deploy would refuse"; PROBLEMS+=("$1"); }
 # -n: no remote command here reads stdin, and without it ssh would swallow
 # what the user types at the confirmation prompt.
 r() { ssh -n "${SSHOPTS[@]}" "$REMOTE" "$@"; }
@@ -167,13 +177,21 @@ needs_person() {
     exit 3
 }
 
+# rollback_to NAME [AS_IT_WAS]: switch back to NAME and see it healthy. With
+# AS_IT_WAS=1 (it was not healthy before the deploy either), NAME running
+# again is as good as it gets.
 rollback_to() {
-    local prev="$1"
+    local prev="$1" as_it_was="${2:-0}"
     say "rolling back to $prev"
     LAST_BODY=""
-    if install_unit "$prev" && switch_to "$prev" && wait_healthy "$(version_of "$prev")"; then
-        info "$prev is running and healthy again"
-        return 0
+    if install_unit "$prev" && switch_to "$prev"; then
+        if wait_healthy "$(version_of "$prev")"; then
+            info "$prev is running and healthy again"
+            return 0
+        elif [ "$as_it_was" -eq 1 ]; then
+            warn "$prev is back, but not healthy: it was not healthy before the deploy either (last: ${LAST_BODY:-no answer})"
+            return 0
+        fi
     fi
     needs_person "ROLLBACK DID NOT COME UP HEALTHY"
 }
@@ -229,13 +247,23 @@ info "arch $remote_arch, service $active"
 [ "${free_kb:-0}" -gt 51200 ] || refuse "less than 50MB free in the home directory on $REMOTE"
 info "running build: $CURRENT"
 
-# unhealthy WHY: a deploy measures the new build against the old one, and its
-# rollback expects the old one back as healthy as it was. If it isn't healthy
-# now (the broker down, say), the deploy can only fail, and its rollback be
-# judged failed too. A rollback goes ahead: this may be why it is wanted.
+# unhealthy WHY: a deploy's rollback expects the old build back as healthy as
+# it was, so with the broker down, say, a deploy can only fail and its
+# rollback be judged failed too. Refused, unless this is a fix for the broken
+# build (--allow-unhealthy), when the rollback accepts it back as it was. A
+# rollback goes ahead: this may be why it is wanted.
+PRE_HEALTHY=1
 unhealthy() {
-    [ "$MODE" = rollback ] && { warn "$1"; return 0; }
-    refuse "$1. Deploy once it is"
+    PRE_HEALTHY=0
+    if [ "$MODE" = rollback ]; then
+        warn "$1"
+    elif [ "$ALLOW_UNHEALTHY" -eq 1 ]; then
+        warn "$1; deploying anyway (--allow-unhealthy)"
+    elif [ "$CHECK" -eq 1 ]; then
+        would_refuse "$1 (--allow-unhealthy to deploy a fix over it)"
+    else
+        refuse "$1. Deploy once it is, or deploy a fix over it with --allow-unhealthy"
+    fi
 }
 
 # The state now, to compare with after.
@@ -296,7 +324,7 @@ if ! git diff --quiet HEAD -- || [ -n "$(git ls-files --others --exclude-standar
         VERSION="$VERSION-dirty"
         warn "uncommitted changes: deploying as $VERSION"
     elif [ "$CHECK" -eq 1 ]; then
-        warn "uncommitted changes: a deploy would refuse (commit first, or --allow-dirty)"
+        would_refuse "uncommitted changes (commit first, or --allow-dirty)"
     else
         refuse "uncommitted changes. The version is the commit, so commit first (or --allow-dirty)"
     fi
@@ -306,13 +334,13 @@ fi
 # Fetch first: a stale origin/main still holds a hash force-pushed away.
 if ! git fetch --quiet --all --prune 2>/dev/null; then
     if [ "$CHECK" -eq 1 ]; then
-        warn "cannot fetch from the remote to see that $VERSION is pushed: a deploy would refuse"
+        would_refuse "cannot fetch from the remote to see that $VERSION is pushed"
     else
         refuse "cannot fetch from the remote, so cannot tell that $VERSION is still pushed"
     fi
 elif [ -z "$(git branch -r --contains HEAD 2>/dev/null)" ]; then
     if [ "$CHECK" -eq 1 ]; then
-        warn "$VERSION is not pushed: a deploy would refuse"
+        would_refuse "$VERSION is not pushed"
     else
         refuse "$VERSION is not on any remote branch. Settle its date and push it first"
     fi
@@ -325,6 +353,11 @@ info "pass"
 
 if [ "$CHECK" -eq 1 ]; then
     echo
+    if [ ${#PROBLEMS[@]} -gt 0 ]; then
+        say "check failed. A deploy would refuse:"
+        for problem in "${PROBLEMS[@]}"; do info "$problem"; done
+        exit 2
+    fi
     say "check passed. A deploy would:"
     info "build $VERSION for $remote_arch and upload it as $SERVICE-<timestamp>-$VERSION"
     info "switch ~/$PI_DIR/$LINK from $CURRENT and restart $SERVICE"
@@ -449,7 +482,7 @@ if [ -n "$failed" ]; then
     echo "!! $NEW FAILED VERIFICATION: $failed" >&2
     r "sudo journalctl -u $SERVICE --since @$since --no-pager -o cat" 2>/dev/null | tail -20 | sed 's/^/   | /' >&2 || true
     r "printf '%s\n' '$NEW' > ~/$PI_DIR/.previous" || warn "could not record $NEW in .previous"
-    rollback_to "$CURRENT"
+    rollback_to "$CURRENT" $((1 - PRE_HEALTHY))
     echo "$NEW stays on $REMOTE for a look; the next deploy's cleanup removes it." >&2
     exit 1
 fi

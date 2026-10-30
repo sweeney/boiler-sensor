@@ -172,9 +172,10 @@ GitHub Actions runs on every push to `main` and on pull requests:
 ## Deployment
 
 ```bash
-./deploy.sh --check      # read-only: every pre-flight check, changes nothing
+./deploy.sh --check      # read-only: every pre-flight check (exit 2 if a deploy would refuse)
 ./deploy.sh              # deploy to sweeney@pi0wh, asking before changing anything
 ./deploy.sh --yes        # without asking
+./deploy.sh --allow-unhealthy   # deploy a fix over a running build that is not healthy
 ./deploy.sh --rollback   # back to the build that ran before the last deploy
 ./deploy.sh --check --rollback   # read-only: what --rollback would do
 ./deploy.sh user@host    # a different Pi

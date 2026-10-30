@@ -84,11 +84,13 @@ if [ "${FAKE_CRASHLOOP:-0}" = 1 ] && [ -n "$ver" ]; then
     started="2026-10-30T10:00:0${n: -1}Z"
 fi
 ch=$(cat "$FAKE_STATE/ch") hw=$(cat "$FAKE_STATE/hw")
-mqtt=true
+mqtt=true ready=true
 [ "${FAKE_MQTT_DOWN:-0}" = 1 ] && mqtt=false
+# FAKE_OLD_BROKEN=1: the legacy build never baselines; a new build is fine.
+[ "${FAKE_OLD_BROKEN:-0}" = 1 ] && [ -z "$ver" ] && ready=false
 case "$path" in
     /index.json)
-        printf '{"status":{"ch":"%s","hw":"%s","ready":true,"uptime_seconds":5,"start_time":"%s","mqtt":{"connected":%s,"broker":"tcp://127.0.0.1:1883"}}}\n' "$ch" "$hw" "$started" "$mqtt" ;;
+        printf '{"status":{"ch":"%s","hw":"%s","ready":%s,"uptime_seconds":5,"start_time":"%s","mqtt":{"connected":%s,"broker":"tcp://127.0.0.1:1883"}}}\n' "$ch" "$hw" "$ready" "$started" "$mqtt" ;;
     /healthz)
         [ -n "$ver" ] || exit 22 # a pre-/healthz build: 404
         status=ok
@@ -425,6 +427,22 @@ check "it says the running build is not healthy" says 'running build is not heal
 check "and restarts nothing" [ "$(restarts)" -eq 0 ]
 deploy FAKE_MQTT_DOWN=1 -- --check
 check "--check fails on it too" rc_is 2
+check "but keeps checking: it still runs vet and test" says '==> go vet and go test'
+check "and ends saying a deploy would refuse" says 'a deploy would refuse'
+
+fresh
+deploy FAKE_OLD_BROKEN=1 -- --yes
+check "a broken running build is refused by default" rc_is 2
+check "the refusal names the override" says '--allow-unhealthy'
+deploy FAKE_OLD_BROKEN=1 -- --allow-unhealthy --yes
+check "--allow-unhealthy deploys a fix over a broken build" rc_is 0
+check "the fix runs" new_build_is_running
+
+fresh
+deploy FAKE_MQTT_DOWN=1 -- --allow-unhealthy --yes
+check "--allow-unhealthy with the broker down: the new build is rolled back (1, not 3)" rc_is 1
+check "the old build is back" link_is "$LEGACY"
+check "accepted as it was before" says 'was not healthy before the deploy either'
 
 fresh
 deploy FAKE_HTTP_DOWN=1 -- --yes
@@ -447,7 +465,8 @@ deploy -- --yes
 check "uncommitted changes are refused" rc_is 2
 check "a refused deploy changes nothing" link_is "$LEGACY"
 deploy -- --check
-check "--check only warns about them" says 'a deploy would refuse'
+check "--check reports them" says 'a deploy would refuse'
+check "and fails" rc_is 2
 
 fresh
 git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m unpushed
