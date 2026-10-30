@@ -32,9 +32,10 @@
 # transition missed during the restart is corrected within a second of it.
 #
 # Exit: 0 deployed and verified (or --check passed); 1 the new build failed
-# verification and was rolled back; 2 a pre-flight check failed or the deploy
-# was declined, nothing changed; 3 rollback did not come up healthy either:
-# needs a person.
+# to start or to verify and was rolled back; 2 a pre-flight check failed, the
+# link to the Pi dropped before the switch, or the deploy was declined:
+# nothing that runs changed; 3 the rollback did not come up healthy (or could
+# not be started): needs a person.
 #
 # Tests: ./deploy_test.sh (runs everything here against stubs).
 set -euo pipefail
@@ -143,8 +144,8 @@ switch_to() {
 rollback_to() {
     local prev="$1"
     say "rolling back to $prev"
-    switch_to "$prev"
-    if wait_healthy "$(version_of "$prev")"; then
+    LAST_BODY=""
+    if switch_to "$prev" && wait_healthy "$(version_of "$prev")"; then
         info "$prev is running and healthy again"
         return 0
     fi
@@ -245,7 +246,7 @@ if [ "$MODE" = rollback ]; then
         exit 0
     fi
     confirm "Switch $REMOTE from $CURRENT back to $recorded_prev and restart $SERVICE?"
-    r "printf '%s\n' '$CURRENT' > ~/$PI_DIR/.previous"
+    r "printf '%s\n' '$CURRENT' > ~/$PI_DIR/.previous" || refuse "cannot record $CURRENT as the build to come back to"
     rollback_to "$recorded_prev"
     say "$SERVICE is back on $recorded_prev (./deploy.sh --rollback again to undo)"
     exit 0
@@ -359,10 +360,10 @@ fi
 
 say "switching to $NEW and restarting"
 r "printf '%s\n' '$CURRENT' > ~/$PI_DIR/.previous" || lost "recording the previous build"
-switch_to "$NEW"
-
 failed=""
-if ! wait_healthy "$VERSION"; then
+if ! switch_to "$NEW"; then
+    failed="the restart failed"
+elif ! wait_healthy "$VERSION"; then
     failed="/healthz did not report $VERSION and status ok within ${VERIFY_TIMEOUT}s (last: ${LAST_BODY:-no answer})"
 else
     info "/healthz: $VERSION ok"
@@ -396,7 +397,7 @@ if [ -n "$failed" ]; then
     echo >&2
     echo "!! $NEW FAILED VERIFICATION: $failed" >&2
     r "journalctl -u $SERVICE --since @$since --no-pager -o cat" 2>/dev/null | tail -20 | sed 's/^/   | /' >&2 || true
-    r "printf '%s\n' '$NEW' > ~/$PI_DIR/.previous"
+    r "printf '%s\n' '$NEW' > ~/$PI_DIR/.previous" || warn "could not record $NEW in .previous"
     rollback_to "$CURRENT"
     echo "$NEW stays on $REMOTE for a look; the next deploy's cleanup removes it." >&2
     exit 1

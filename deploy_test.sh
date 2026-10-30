@@ -73,6 +73,7 @@ cat >"$STUBS/curl" <<'EOF'
 [ "${FAKE_HTTP_DOWN:-0}" = 1 ] && exit 7
 url="${*: -1}" path="/${url#http://*/}"
 running=$(cat "$FAKE_STATE/running")
+[ "$running" = DOWN ] && exit 7
 ver=$(head -1 "$FAKE_HOME/boiler-sensor/$running" | sed -n 's/^FAKEBIN version=//p')
 started=$(cat "$FAKE_STATE/started")
 if [ "${FAKE_CRASHLOOP:-0}" = 1 ] && [ -n "$ver" ]; then
@@ -119,7 +120,15 @@ echo "systemctl $*" >>"$FAKE_STATE/log"
 case "$1" in
     is-active) echo active ;;
     restart)
-        basename "$(readlink "$HOME/boiler-sensor/boiler-sensor-arm")" >"$FAKE_STATE/running"
+        target=$(basename "$(readlink "$HOME/boiler-sensor/boiler-sensor-arm")")
+        # FAKE_RESTART_FAIL=GLOB: starting a build that matches fails.
+        # shellcheck disable=SC2053 # a glob on purpose
+        if [ -n "${FAKE_RESTART_FAIL:-}" ] && [[ "$target" == $FAKE_RESTART_FAIL ]]; then
+            echo DOWN >"$FAKE_STATE/running"
+            echo "Job for boiler-sensor.service failed." >&2
+            exit 1
+        fi
+        echo "$target" >"$FAKE_STATE/running"
         n=$(wc -l <"$FAKE_STATE/log" | tr -d ' ')
         printf '2026-10-30T10:%02d:00Z\n' "$n" >"$FAKE_STATE/started" ;;
 esac
@@ -271,6 +280,18 @@ check "an unhealthy new build exits 1" rc_is 1
 check "an unhealthy new build is rolled back" link_is "$LEGACY"
 check "the rolled-back build is running" [ "$(cat "$FAKE_STATE/running")" = "$LEGACY" ]
 check "it says what failed" says 'FAILED VERIFICATION: /healthz did not report'
+
+fresh
+deploy FAKE_RESTART_FAIL="*-$VERSION" -- --yes
+check "a restart that fails is rolled back" link_is "$LEGACY"
+check "the old build runs again" [ "$(cat "$FAKE_STATE/running")" = "$LEGACY" ]
+check "and exits 1" rc_is 1
+check "it says the restart failed" says 'FAILED VERIFICATION: the restart failed'
+
+fresh
+deploy FAKE_RESTART_FAIL="*" -- --yes
+check "a rollback whose restart fails too needs a person" rc_is 3
+check "and says so" says 'needs a person'
 
 fresh
 deploy FAKE_CRASHLOOP=1 -- --yes
