@@ -350,9 +350,17 @@ confirm "Upload $NEW to $REMOTE, switch $SERVICE to it from $CURRENT and restart
 say "uploading $NEW"
 STAGE=".incoming-$NEW"
 cleanup_stage() { r "rm -f ~/$PI_DIR/$STAGE ~/$PI_DIR/$NEW ~/$PI_DIR/$UNITS/$NEW.service" 2>/dev/null || true; }
-# lost DOING: the link dropped after the upload, before anything that runs
-# changed. Tidy up if it is back; a later deploy removes what it can't.
-lost() { cleanup_stage; refuse "lost $REMOTE after the upload, $1"; }
+# step_failed STEP: a step after the upload failed, before anything that runs
+# changed. Say whether the link dropped or the step itself failed (a full
+# disk, say), and tidy up if the link is there; a later deploy removes what
+# this can't.
+step_failed() {
+    if r true 2>/dev/null; then
+        cleanup_stage
+        refuse "$1 failed on $REMOTE after the upload"
+    fi
+    refuse "lost $REMOTE after the upload, while $1"
+}
 uploaded=0
 for attempt in 1 2 3; do
     if rsync -z --partial --timeout=45 -e "ssh ${SSHOPTS[*]}" "$LOCAL_BIN" "$REMOTE:$PI_DIR/$STAGE"; then
@@ -364,18 +372,18 @@ for attempt in 1 2 3; do
 done
 [ $uploaded -eq 1 ] || { cleanup_stage; refuse "upload failed three times"; }
 local_sum=$(shasum -a 256 "$LOCAL_BIN" | cut -d' ' -f1)
-remote_sum=$(r "sha256sum ~/$PI_DIR/$STAGE" | cut -d' ' -f1) || lost "checking its sha256"
+remote_sum=$(r "sha256sum ~/$PI_DIR/$STAGE" | cut -d' ' -f1) || step_failed "checking its sha256"
 [ "$local_sum" = "$remote_sum" ] || { cleanup_stage; refuse "upload corrupted: sha256 $remote_sum, expected $local_sum"; }
-r "chmod 0755 ~/$PI_DIR/$STAGE && mv ~/$PI_DIR/$STAGE ~/$PI_DIR/$NEW" || lost "moving it into place"
+r "chmod 0755 ~/$PI_DIR/$STAGE && mv ~/$PI_DIR/$STAGE ~/$PI_DIR/$NEW" || step_failed "moving it into place"
 info "sha256 verified"
-since=$(r "date +%s") || lost "reading its clock"
+since=$(r "date +%s") || step_failed "reading its clock"
 
 # The unit file the running build runs under (if any: an old layout may have
 # none here), and the new build's, beside their builds. Nothing that runs
 # reads these.
 r "mkdir -p ~/$PI_DIR/$UNITS && cd ~/$PI_DIR && { [ ! -f $SERVICE.service ] || cp $SERVICE.service $UNITS/$CURRENT.service; }" ||
-    lost "recording the running build's unit file"
-rsync -e "ssh ${SSHOPTS[*]}" "$SERVICE.service" "$REMOTE:$PI_DIR/$UNITS/$NEW.service" || lost "uploading the unit file"
+    step_failed "recording the running build's unit file"
+rsync -e "ssh ${SSHOPTS[*]}" "$SERVICE.service" "$REMOTE:$PI_DIR/$UNITS/$NEW.service" || step_failed "uploading the unit file"
 
 # put_back_unit: after a failed install of the new unit, nothing has restarted:
 # put the running build's unit back (or none, if it had none here). The

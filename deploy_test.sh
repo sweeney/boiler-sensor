@@ -184,6 +184,13 @@ echo "usermod $*" >>"$FAKE_STATE/log"
 [ "$1 $2" = "-aG gpio" ] && echo yes >"$FAKE_STATE/gpio"
 EOF
 
+cat >"$RSTUBS/mv" <<'EOF'
+#!/usr/bin/env bash
+# FAKE_DISK_FULL=1: moves fail, as on a full disk.
+[ "${FAKE_DISK_FULL:-0}" = 1 ] && { echo "mv: cannot move: No space left on device" >&2; exit 1; }
+PATH="${PATH#*:}" exec mv "$@"
+EOF
+
 cat >"$RSTUBS/uname" <<'EOF'
 #!/usr/bin/env bash
 echo "${FAKE_ARCH:-armv6l}"
@@ -499,14 +506,21 @@ check "and the staged file is removed" [ "$(count '.incoming-*')" -eq 0 ]
 fresh
 deploy FAKE_SSH_DROP_AFTER_UPLOAD=once -- --yes
 check "a dropped link after the upload is refused (2, not ssh's 255)" rc_is 2
-check "it says what it was doing" says 'REFUSED: lost .* after the upload'
+check "it says what it was doing" says 'REFUSED: checking its sha256 failed on .* after the upload'
 check "nothing is switched after the drop" link_is "$LEGACY"
 check "the staged file is removed once the link is back" [ "$(count '.incoming-*')" -eq 0 ]
 check "and so is any half-installed build" [ "$(count 'boiler-sensor-2*')" -eq 3 ]
 
 fresh
+deploy FAKE_DISK_FULL=1 -- --yes
+check "a remote step that fails with the link up is refused" rc_is 2
+check "named by the step, not blamed on the link" says 'REFUSED: moving it into place failed on '
+check "not 'lost'" eval '! says "REFUSED: lost"'
+
+fresh
 deploy FAKE_SSH_DROP_AFTER_UPLOAD=stay -- --yes
 check "a link that stays down after the upload is refused too" rc_is 2
+check "and that one says the link was lost" says 'REFUSED: lost .* after the upload, while checking its sha256'
 check "the staged file cannot be removed then" [ "$(count '.incoming-*')" -eq 1 ]
 rm "$FAKE_STATE/ssh_down"
 sleep 1 # another build name, so another staging name
