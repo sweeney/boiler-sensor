@@ -170,6 +170,7 @@ jobs:
         run: shellcheck -x deploy.sh setup-pi.sh deploy/lib.sh deploy_test.sh
 
       - name: deploy_test.sh
+        if: always()
         run: ./deploy_test.sh
 
   build:

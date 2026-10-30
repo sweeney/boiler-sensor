@@ -192,8 +192,9 @@ if [ -n "$pre_body" ]; then
     pre_mqtt=$(jget status.mqtt.connected <<<"$pre_body")
     broker=$(jget status.mqtt.broker <<<"$pre_body")
     info "state: ch=$PRE_CH hw=$PRE_HW ready=$pre_ready mqtt=$pre_mqtt, up $(jget status.uptime_seconds <<<"$pre_body")s"
-    [ "$pre_ready" = true ] && [ "$pre_mqtt" = true ] ||
+    if [ "$pre_ready" != true ] || [ "$pre_mqtt" != true ]; then
         unhealthy "the running build is not healthy right now (ready=$pre_ready mqtt=$pre_mqtt)"
+    fi
     # tcp://host:port -> host, port
     broker="${broker#*://}"
     BROKER_HOST="${broker%%:*}"

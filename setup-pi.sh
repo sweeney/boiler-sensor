@@ -49,7 +49,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 source deploy/lib.sh
 
 stopped() { printf '\nFAILED: %s\nSetup stopped part way. Fix that and re-run: it carries on from here.\n' "$*" >&2; exit 3; }
-# shellcheck disable=SC2329 # upload_build calls it by name
+# shellcheck disable=SC2317,SC2329 # upload_build calls it by name
 upload_failed() { stopped "$1 failed"; }
 
 # --------------------------------------------------------------------------
