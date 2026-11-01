@@ -2,7 +2,7 @@ module github.com/sweeney/boiler-sensor
 
 go 1.21
 
-require github.com/sweeney/common/iot v0.1.0
+require github.com/sweeney/common/iot v0.1.1
 
 require (
 	github.com/eclipse/paho.mqtt.golang v1.4.3 // indirect

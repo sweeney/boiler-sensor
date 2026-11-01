@@ -16,7 +16,7 @@ A Go daemon for Raspberry Pi that monitors heating system GPIO inputs and publis
 The sensor engine (debounce, baseline, heartbeat, MQTT plumbing and the daemon
 runtime) lives in the shared module
 [`github.com/sweeney/common/iot`](https://github.com/sweeney/common/tree/main/iot),
-pinned at `iot/v0.1.0`. This repo is the boiler binary on top of it:
+pinned at `iot/v0.1.1`. This repo is the boiler binary on top of it:
 
 ```
 cmd/boiler-sensor/    # flags, wiring and boilerProfile(): the only place the
