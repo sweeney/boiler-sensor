@@ -38,7 +38,7 @@ The engine packages it consumes: `iot` (the `Run` runtime), `iot/profile`,
 deliberately NOT in `common/iot` — it's service-specific presentation, so it
 lives here in `internal/web`.
 
-`go.mod` pins the published `github.com/sweeney/common/iot v0.1.1` — there is no
+`go.mod` pins the published `github.com/sweeney/common/iot v0.1.2` — there is no
 `replace` directive, so the build does not depend on a sibling checkout.
 
 To work on the engine and this binary together, create a **gitignored** `go.work`
@@ -52,7 +52,7 @@ use (
 	/abs/path/to/boiler-sensor
 )
 // Version-specific: a bare replace of a `use`d module is rejected by go.
-replace github.com/sweeney/common/iot v0.1.1 => /abs/path/to/common/iot
+replace github.com/sweeney/common/iot v0.1.2 => /abs/path/to/common/iot
 ```
 
 ### Engine rules (enforced in `common/iot`, not here)
@@ -83,9 +83,10 @@ These invariants are now owned and tested by the `common/iot` module:
 - **No MQTT events at startup** - only after baseline established
 - Events only on transitions: CH_ON, CH_OFF, HW_ON, HW_OFF
 - Network info (status page, heartbeats) comes from pi-helper's
-  `/run/pi-helper.env`, re-read at every heartbeat by `common/iot` (since
-  v0.1.1). The unit's `EnvironmentFile=` copy is only a fallback: it is read
-  once at start, often before the WiFi is up after a boot.
+  `/run/pi-helper.env`, re-read by `common/iot` at every heartbeat (since
+  v0.1.1) and into the tracker the status page reads every 5s (since v0.1.2).
+  The unit's `EnvironmentFile=` copy is only a fallback: it is read once at
+  start, often before the WiFi is up after a boot.
 
 ## MQTT Payload Format
 
